@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Dict, List
+
+if getattr(sys, "frozen", False):
+    # Running in a bundled executable (e.g. PyInstaller)
+    BASE_PATH = Path(sys.executable).parent
+else:
+    # Running as a normal script/module
+    BASE_PATH = Path(__file__).parent.resolve()
 
 GAME_NAME = "KB_WARRIOR"
 EVENT_NAME = "CHARACTER"
@@ -52,7 +60,7 @@ DAMAGE_GROWTH = 1.12
 MONSTER_XP_BASE = 10
 MONSTER_XP_PER_LEVEL = 3
 
-HIGH_SCORES_PATH = Path(__file__).with_name("high_scores.json")
+HIGH_SCORES_PATH = BASE_PATH / "high_scores.json"
 
 RIGHT_SPRITE_SLIDE_PX_PER_SECOND = 40.0
 BACKGROUND_SCROLL_PX_PER_SECOND = 10.0
