@@ -236,3 +236,37 @@ def compose_shutdown_summary_frame(
         draw_text_5x7(canvas, line, x, y)
 
     return canvas_to_image_data(canvas)
+
+
+def compose_best_score_frame(best_score: dict | None) -> List[int]:
+    canvas = [[0 for _ in range(WIDTH)] for _ in range(HEIGHT)]
+
+    keystrokes = 0
+    monsters_killed = 0
+    level = 1
+    if isinstance(best_score, dict):
+        try:
+            keystrokes = max(0, int(best_score.get("keystrokes", 0)))
+            monsters_killed = max(0, int(best_score.get("monsters_killed", 0)))
+            level = max(1, int(best_score.get("level", 1)))
+        except (TypeError, ValueError):
+            pass
+
+    lines = [
+        f"TOP KEYS:{keystrokes}",
+        f"KILLS:{monsters_killed}",
+        f"LV:{level}",
+    ]
+
+    line_height = 7
+    line_spacing = 1
+    total_height = len(lines) * line_height + max(0, len(lines) - 1) * line_spacing
+    start_y = max(0, (HEIGHT - total_height) // 2)
+
+    for idx, line in enumerate(lines):
+        line_width = measure_text_5x7_width(line)
+        x = max(0, (WIDTH - line_width) // 2)
+        y = start_y + idx * (line_height + line_spacing)
+        draw_text_5x7(canvas, line, x, y)
+
+    return canvas_to_image_data(canvas)

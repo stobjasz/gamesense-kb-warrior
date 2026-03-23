@@ -6,10 +6,12 @@ from typing import Dict, List
 
 if getattr(sys, "frozen", False):
     # Running in a bundled executable (e.g. PyInstaller)
-    BASE_PATH = Path(sys.executable).parent
+    RUNTIME_BASE_PATH = Path(sys.executable).resolve().parent
+    RESOURCE_BASE_PATH = Path(getattr(sys, "_MEIPASS", RUNTIME_BASE_PATH))
 else:
     # Running as a normal script/module
-    BASE_PATH = Path(__file__).parent.resolve()
+    RUNTIME_BASE_PATH = Path(__file__).parent.resolve()
+    RESOURCE_BASE_PATH = RUNTIME_BASE_PATH
 
 GAME_NAME = "KB_WARRIOR"
 EVENT_NAME = "CHARACTER"
@@ -17,13 +19,14 @@ EVENT_NAME = "CHARACTER"
 WIDTH = 128
 HEIGHT = 40
 
-SPRITESHEET_PATH = Path("32x32-Charset-Outline.png")
-WARRIOR_IDLE_PATH = Path("warrioridle-Sheet.png")
-WARRIOR_RUN_PATH = Path("warriorrun-Sheet.png")
-WARRIOR_BLOCK_PATH = Path("warriorblock-Sheet.png")
-WARRIOR_ATTACK_PATH = Path("warriorattack-Sheet.png")
-DEATH_FX_PATH = Path("deathfx-Sheet.png")
-SLASH_FX_PATH = Path("warriorslashfx-Sheet.png")
+ASSETS_PATH = RESOURCE_BASE_PATH / "assets"
+SPRITESHEET_PATH = ASSETS_PATH / "32x32-Charset-Outline.png"
+WARRIOR_IDLE_PATH = ASSETS_PATH / "warrioridle-Sheet.png"
+WARRIOR_RUN_PATH = ASSETS_PATH / "warriorrun-Sheet.png"
+WARRIOR_BLOCK_PATH = ASSETS_PATH / "warriorblock-Sheet.png"
+WARRIOR_ATTACK_PATH = ASSETS_PATH / "warriorattack-Sheet.png"
+DEATH_FX_PATH = ASSETS_PATH / "deathfx-Sheet.png"
+SLASH_FX_PATH = ASSETS_PATH / "warriorslashfx-Sheet.png"
 
 TILE_SIZE = 32
 FRAMES_PER_CHARACTER = 4
@@ -60,11 +63,13 @@ DAMAGE_GROWTH = 1.12
 MONSTER_XP_BASE = 10
 MONSTER_XP_PER_LEVEL = 3
 
-HIGH_SCORES_PATH = BASE_PATH / "high_scores.json"
+HIGH_SCORES_PATH = RUNTIME_BASE_PATH / "high_scores.json"
+CURRENT_STATS_SAVE_INTERVAL_SECONDS = 30.0
 
 RIGHT_SPRITE_SLIDE_PX_PER_SECOND = 40.0
 BACKGROUND_SCROLL_PX_PER_SECOND = 10.0
 GAMESENSE_RETRY_SECONDS = 10.0
+STARTUP_BEST_SCORE_DISPLAY_SECONDS = 2.0
 INSTANCE_LOCK_FILENAME = "kbwarrior.lock"
 
 FONT_5X7: Dict[str, List[int]] = {

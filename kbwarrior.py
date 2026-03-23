@@ -129,7 +129,23 @@ def main() -> int:
     if gamesense_base_url is None:
         gamesense_next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
 
-    stop_event = threading.Event()
+    stop_event = threading.Event()    
+
+    best_score = kb_scores.get_best_score(cfg.HIGH_SCORES_PATH)
+    if gamesense_base_url is not None and best_score is not None:
+        try:
+            best_score_frame = kb_render.compose_best_score_frame(best_score)
+            kb_gamesense.send_frame(gamesense_base_url, best_score_frame)
+            display_until = (
+                time.monotonic() + max(0.0, cfg.STARTUP_BEST_SCORE_DISPLAY_SECONDS)
+            )
+            while not stop_event.is_set() and time.monotonic() < display_until:
+                time.sleep(min(0.1, display_until - time.monotonic()))
+        except (URLError, HTTPError, OSError) as exc:
+            gamesense_base_url = None
+            gamesense_last_error = f"send failed: {exc}"
+            gamesense_next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
+
     key_counter = [0]
     space_counter = [0]
     other_counter = [0]
@@ -156,6 +172,8 @@ def main() -> int:
     last_attack_end_keystrokes = 0
     monsters_killed = 0
     session_started_at = datetime.now().isoformat(timespec="seconds")
+    stats_save_interval_seconds = max(0.0, cfg.CURRENT_STATS_SAVE_INTERVAL_SECONDS)
+    next_stats_save_at = time.monotonic() + stats_save_interval_seconds
     monster_refresh_active = False
     idle_refresh_done_for_current_idle = False
     last_seen_input_time = last_input_time[0]
@@ -219,6 +237,25 @@ def main() -> int:
                 current_space_count = space_counter[0]
                 current_other_count = other_counter[0]
                 current_last_input_time = last_input_time[0]
+
+            if (
+                stats_save_interval_seconds > 0
+                and loop_start >= next_stats_save_at
+            ):
+                try:
+                    kb_scores.update_current_stats(
+                        cfg.HIGH_SCORES_PATH,
+                        session_started_at,
+                        current_keypress_count,
+                        monsters_killed,
+                        warrior_level,
+                    )
+                except OSError as exc:
+                    print(
+                        f"Warning: could not update current stats: {exc}",
+                        file=sys.stderr,
+                    )
+                next_stats_save_at = loop_start + stats_save_interval_seconds
 
             if current_last_input_time != last_seen_input_time:
                 idle_refresh_done_for_current_idle = False
@@ -472,6 +509,7 @@ def main() -> int:
         pass
     finally:
         stop_event.set()
+
         keyboard_listener.stop()
         mouse_listener.stop()
         keyboard_listener.join(timeout=1)
