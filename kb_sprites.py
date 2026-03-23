@@ -19,6 +19,20 @@ def _tile_to_canvas(tile_image: Image.Image) -> List[List[int]]:
     return canvas
 
 
+def _image_to_canvas(tile_image: Image.Image) -> List[List[int]]:
+    rgba = tile_image.convert("RGBA")
+    w, h = rgba.size
+    canvas = [[0] * w for _ in range(h)]
+    px = rgba.load()
+    threshold = 255 * 3 // 2
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a > 0:
+                canvas[y][x] = 1 if (r + g + b) >= threshold else 2
+    return canvas
+
+
 def get_tile_x_bounds(tile: List[List[int]]) -> tuple[int, int] | None:
     min_x, max_x = TILE_SIZE, -1
     for y in range(TILE_SIZE):
@@ -93,6 +107,20 @@ def load_slashfx_frames(path: Path) -> List[List[List[int]]]:
     if frame_count <= 0:
         raise ValueError("Slash FX sheet contains no frames")
     return load_sprite_strip_frames(path, frame_count)
+
+
+def load_drop_tiles(path: Path) -> List[List[List[int]]]:
+    if not path.is_dir():
+        raise FileNotFoundError(f"Drop tiles directory not found: {path}")
+    tiles: List[List[List[int]]] = []
+    for file_path in sorted(path.glob("*.png")):
+        image = Image.open(file_path)
+        if image.size != (16, 16):
+            raise ValueError(f"Drop tile '{file_path}' must be exactly 16x16")
+        tiles.append(_image_to_canvas(image))
+    if not tiles:
+        raise ValueError(f"No drop tiles found in: {path}")
+    return tiles
 
 
 def spawn_right_sprite(all_characters, left_sprite_x, left_collision_rightmost, monster_level):

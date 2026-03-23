@@ -19,6 +19,10 @@ class RenderState:
     show_health_bar: bool
     show_hud: bool
     slashfx_tile: List[List[int]] | None
+    drop_tile: List[List[int]] | None
+    drop_x: int
+    drop_y: int
+    show_drop: bool
 
 
 def canvas_to_image_data(canvas: List[List[int]]) -> List[int]:
@@ -56,11 +60,13 @@ def draw_text_5x7(canvas: List[List[int]], text: str, start_x: int, start_y: int
 
 
 def draw_tile_on_canvas(canvas: List[List[int]], tile: List[List[int]], x_offset: int, y_offset: int) -> None:
-    for y in range(TILE_SIZE):
+    tile_h = len(tile)
+    tile_w = len(tile[0]) if tile_h > 0 else 0
+    for y in range(tile_h):
         ty = y_offset + y
         if not (0 <= ty < HEIGHT):
             continue
-        for x in range(TILE_SIZE):
+        for x in range(tile_w):
             pixel = tile[y][x]
             if pixel == 0:
                 continue
@@ -137,6 +143,9 @@ def compose_frame(state: RenderState) -> List[int]:
     if state.slashfx_tile is not None:
         slashfx_x = state.left_sprite_x + ((state.right_sprite_x - state.left_sprite_x) // 2) + SLASHFX_X_OFFSET
         draw_tile_on_canvas(canvas, state.slashfx_tile, slashfx_x, HEIGHT - TILE_SIZE)
+
+    if state.show_drop and state.drop_tile is not None:
+        draw_tile_on_canvas(canvas, state.drop_tile, state.drop_x, state.drop_y)
 
     level_text_right = -2
     if state.show_hud:

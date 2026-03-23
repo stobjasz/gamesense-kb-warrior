@@ -183,6 +183,15 @@ class SessionState:
     save_interval: float = 0.0
 
 
+@dataclass
+class DropState:
+    tile: List[List[int]]
+    x: float
+    y: float
+    expires_at: float
+    spawned_at: float
+
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 
 def format_tray_tooltip(warrior_level: int, monsters_killed: int, keycount: int,
@@ -255,6 +264,7 @@ def main() -> int:
         warrior_animations = kb_sprites.load_warrior_animations()
         deathfx_frames = kb_sprites.load_sprite_strip_frames(cfg.DEATH_FX_PATH, 4)
         slashfx_frames = kb_sprites.load_slashfx_frames(cfg.SLASH_FX_PATH)
+        drop_tiles = kb_sprites.load_drop_tiles(cfg.DROPS_PATH)
     except (OSError, ValueError) as exc:
         print(f"Asset loading error: {exc}", file=sys.stderr)
         return 1
@@ -299,6 +309,7 @@ def main() -> int:
     deathfx_active      = False
     deathfx_frame_index = 0
     deathfx_tick_acc    = 0.0
+    active_drop: DropState | None = None
 
     # GameSense
     gs_url, gs_err = kb_gamesense.connect_gamesense_with_error()
@@ -410,6 +421,28 @@ def main() -> int:
                     deathfx_frame_index = 0
                     deathfx_tick_acc = 0.0
                     monster.x = monster.target_x
+                    now = time.monotonic()
+                    drop_tile = random.choice(drop_tiles)
+                    drop_x = monster.target_x + ((cfg.TILE_SIZE - cfg.DROP_TILE_SIZE) // 2)
+                    # Put drop on the ground line (monster feet baseline).
+                    drop_y = cfg.HEIGHT - cfg.DROP_TILE_SIZE
+                    active_drop = DropState(
+                        tile=drop_tile,
+                        x=float(drop_x),
+                        y=float(drop_y),
+                        spawned_at=now,
+                        expires_at=now + cfg.DROP_DISPLAY_SECONDS,
+                    )
+
+            if active_drop is not None:
+                now = time.monotonic()
+                if now >= active_drop.expires_at:
+                    active_drop = None
+                # Remove early only when someone actually reaches the drop position.
+                elif (not deathfx_active) and monster.x <= active_drop.x:
+                    active_drop = None
+                elif warrior_x >= active_drop.x:
+                    active_drop = None
 
             # Death FX or normal monster tile
             if deathfx_active:
@@ -454,6 +487,15 @@ def main() -> int:
             show_health_bar = (
                 monster.x <= monster.target_x and not deathfx_active and not monster.refresh_active
             )
+            show_drop = False
+            drop_tile = None
+            drop_x = 0
+            drop_y = 0
+            if active_drop is not None:
+                show_drop = (int((time.monotonic() - active_drop.spawned_at) / cfg.DROP_BLINK_SECONDS) % 2) == 0
+                drop_tile = active_drop.tile
+                drop_x = int(active_drop.x)
+                drop_y = int(active_drop.y)
 
             frame = kb_render.compose_frame(kb_render.RenderState(
                 background_tile=background_tile,
@@ -469,6 +511,10 @@ def main() -> int:
                 show_health_bar=show_health_bar,
                 show_hud=show_hud,
                 slashfx_tile=slashfx_tile,
+                drop_tile=drop_tile,
+                drop_x=drop_x,
+                drop_y=drop_y,
+                show_drop=show_drop,
             ))
             send_frame_with_retry(gs, frame)
 
