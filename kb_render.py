@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List
 
 from kb_config import (
@@ -14,6 +15,23 @@ from kb_config import (
     TILE_SIZE,
     WIDTH,
 )
+
+
+@dataclass(frozen=True)
+class RenderState:
+    background_tile: List[List[int]]
+    background_scroll_x: int
+    right_sprite_tile: List[List[int]]
+    right_sprite_x: int
+    left_sprite_tile: List[List[int]]
+    left_sprite_x: int
+    warrior_level: int
+    keypress_count: int
+    right_sprite_value: int
+    right_sprite_max_value: int
+    show_health_bar: bool
+    show_hud: bool
+    slashfx_tile: List[List[int]] | None
 
 
 def _draw_centered_lines(canvas: List[List[int]], lines: List[str]) -> None:
@@ -187,39 +205,25 @@ def draw_scrolling_background(
                 canvas[y][x] = 1
 
 
-def compose_frame(
-    background_tile: List[List[int]],
-    background_scroll_x: int,
-    right_sprite_tile: List[List[int]],
-    right_sprite_x: int,
-    left_sprite_tile: List[List[int]],
-    left_sprite_x: int,
-    warrior_level: int,
-    keypress_count: int,
-    right_sprite_value: int,
-    right_sprite_max_value: int,
-    show_health_bar: bool,
-    show_hud: bool,
-    slashfx_tile: List[List[int]] | None,
-) -> List[int]:
+def compose_frame(state: RenderState) -> List[int]:
     canvas = [[0 for _ in range(WIDTH)] for _ in range(HEIGHT)]
-    draw_scrolling_background(canvas, background_tile, background_scroll_x)
-    draw_tile_on_canvas(canvas, right_sprite_tile, right_sprite_x, HEIGHT - TILE_SIZE)
-    draw_tile_on_canvas(canvas, left_sprite_tile, left_sprite_x, HEIGHT - TILE_SIZE)
+    draw_scrolling_background(canvas, state.background_tile, state.background_scroll_x)
+    draw_tile_on_canvas(canvas, state.right_sprite_tile, state.right_sprite_x, HEIGHT - TILE_SIZE)
+    draw_tile_on_canvas(canvas, state.left_sprite_tile, state.left_sprite_x, HEIGHT - TILE_SIZE)
 
-    if slashfx_tile is not None:
-        slashfx_x = LEFT_SPRITE_X + ((right_sprite_x - LEFT_SPRITE_X) // 2) + SLASHFX_X_OFFSET
-        draw_tile_on_canvas(canvas, slashfx_tile, slashfx_x, HEIGHT - TILE_SIZE)
+    if state.slashfx_tile is not None:
+        slashfx_x = LEFT_SPRITE_X + ((state.right_sprite_x - LEFT_SPRITE_X) // 2) + SLASHFX_X_OFFSET
+        draw_tile_on_canvas(canvas, state.slashfx_tile, slashfx_x, HEIGHT - TILE_SIZE)
 
-    if show_hud:
-        level_text = f"LV:{warrior_level}"
+    if state.show_hud:
+        level_text = f"LV:{state.warrior_level}"
         level_text_right = 1 + measure_text_5x7_width(level_text) - 1
-        draw_level_label(canvas, warrior_level)
+        draw_level_label(canvas, state.warrior_level)
     else:
         level_text_right = -2
 
-    if show_health_bar:
-        desired_bar_x = right_sprite_x + ((TILE_SIZE - HEALTH_BAR_WIDTH) // 2)
+    if state.show_health_bar:
+        desired_bar_x = state.right_sprite_x + ((TILE_SIZE - HEALTH_BAR_WIDTH) // 2)
         min_bar_x = level_text_right + 2
         max_bar_x = WIDTH - HEALTH_BAR_WIDTH
         bar_x = min(max(desired_bar_x, min_bar_x), max_bar_x)
@@ -228,12 +232,12 @@ def compose_frame(
             bar_x,
             HEALTH_BAR_Y,
             HEALTH_BAR_WIDTH,
-            right_sprite_value,
-            right_sprite_max_value,
+            state.right_sprite_value,
+            state.right_sprite_max_value,
         )
 
-    if show_hud:
-        draw_key_counter(canvas, keypress_count)
+    if state.show_hud:
+        draw_key_counter(canvas, state.keypress_count)
 
     return canvas_to_image_data(canvas)
 

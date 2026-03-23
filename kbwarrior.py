@@ -13,6 +13,7 @@ import ctypes.wintypes as wt
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import List
 from urllib.error import HTTPError, URLError
@@ -26,6 +27,7 @@ import kb_render
 import kb_scores
 import kb_sprites
 import kb_tray
+from kb_warrior_state import WarriorAnimations, WarriorStateController, WarriorTiming
 
 
 WM_QUERYENDSESSION = 0x0011
@@ -195,22 +197,30 @@ def format_tray_tooltip(
     return f"{stats_line}\n{error_line}\n{retry_line}"
 
 
+@dataclass
+class GameSenseState:
+    base_url: str | None
+    last_error: str | None
+    next_retry_at: float
+
+
 def retry_gamesense_connection_if_due(
-    gamesense_base_url: str | None,
-    gamesense_next_retry_at: float,
+    gamesense_state: GameSenseState,
     loop_start: float,
-) -> tuple[str | None, str | None, float]:
-    if gamesense_base_url is not None or loop_start < gamesense_next_retry_at:
-        return gamesense_base_url, None, gamesense_next_retry_at
+) -> None:
+    if gamesense_state.base_url is not None or loop_start < gamesense_state.next_retry_at:
+        return
 
     gamesense_base_url, connect_error = kb_gamesense.connect_gamesense_with_error()
     if gamesense_base_url is None:
-        return (
-            None,
-            connect_error or "GameSense reconnect failed",
-            loop_start + cfg.GAMESENSE_RETRY_SECONDS,
-        )
-    return gamesense_base_url, None, 0.0
+        gamesense_state.base_url = None
+        gamesense_state.last_error = connect_error or "GameSense reconnect failed"
+        gamesense_state.next_retry_at = loop_start + cfg.GAMESENSE_RETRY_SECONDS
+        return
+
+    gamesense_state.base_url = gamesense_base_url
+    gamesense_state.last_error = None
+    gamesense_state.next_retry_at = 0.0
 
 
 def maybe_save_current_stats(
@@ -241,50 +251,21 @@ def maybe_save_current_stats(
     return loop_start + stats_save_interval_seconds
 
 
-def maybe_start_warrior_action(
-    warrior_state: str,
-    is_sliding: bool,
-    deathfx_active: bool,
-    monster_refresh_active: bool,
-    run_post_slide_remaining: int,
-    new_space_presses: int,
-    new_other_presses: int,
-    slashfx_frames: List[List[List[int]]],
-) -> tuple[str, int, float, List[List[List[int]]] | None]:
-    if (
-        is_sliding
-        or deathfx_active
-        or monster_refresh_active
-        or warrior_state != "idle"
-        or run_post_slide_remaining != 0
-    ):
-        return warrior_state, 0, 0.0, None
-
-    if new_space_presses > 0:
-        return "block", 0, 0.0, None
-
-    if new_other_presses > 0:
-        return "attack", 0, 0.0, slashfx_frames
-
-    return warrior_state, 0, 0.0, None
-
-
 def send_frame_with_retry(
-    gamesense_base_url: str | None,
+    gamesense_state: GameSenseState,
     combined_frame: dict,
-) -> tuple[str | None, str | None, float]:
-    if gamesense_base_url is None:
-        return None, None, 0.0
+) -> None:
+    if gamesense_state.base_url is None:
+        return
 
     try:
-        kb_gamesense.send_frame(gamesense_base_url, combined_frame)
-        return gamesense_base_url, None, 0.0
+        kb_gamesense.send_frame(gamesense_state.base_url, combined_frame)
+        gamesense_state.last_error = None
+        gamesense_state.next_retry_at = 0.0
     except (URLError, HTTPError, OSError) as exc:
-        return (
-            None,
-            f"send failed: {exc}",
-            time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS,
-        )
+        gamesense_state.base_url = None
+        gamesense_state.last_error = f"send failed: {exc}"
+        gamesense_state.next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
 
 
 def update_monster_slide_and_refresh(
@@ -375,7 +356,6 @@ def main() -> int:
     right_sprite_value = right_sprite_max_hp
     deathfx_active = False
     deathfx_frame_index = 0
-    active_slashfx_frames: List[List[List[int]]] | None = None
     background_tile = kb_render.make_minimal_background_tile()
     background_scroll_x = 0.0
 
@@ -406,16 +386,32 @@ def main() -> int:
 
     right_sprite_frame_index = 0
     right_sprite_tick_accumulator = 0.0
-    idle_frame_index = 0
-    idle_tick_accumulator = 0.0
-    run_tick_accumulator = 0.0
-    state_tick_accumulator = 0.0
+    warrior_controller = WarriorStateController(
+        WarriorAnimations(
+            idle=idle_warrior_frames,
+            run=run_warrior_frames,
+            block=block_warrior_frames,
+            attack=attack_warrior_frames,
+        ),
+        WarriorTiming(
+            idle_seconds_per_frame=idle_seconds_per_frame,
+            run_seconds_per_frame=run_seconds_per_frame,
+            block_seconds_per_frame=block_seconds_per_frame,
+            attack_seconds_per_frame=attack_seconds_per_frame,
+        ),
+    )
     deathfx_tick_accumulator = 0.0
 
     gamesense_base_url, gamesense_last_error = kb_gamesense.connect_gamesense_with_error()
-    gamesense_next_retry_at = 0.0
-    if gamesense_base_url is None:
-        gamesense_next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
+    gamesense_state = GameSenseState(
+        base_url=gamesense_base_url,
+        last_error=gamesense_last_error,
+        next_retry_at=(
+            0.0
+            if gamesense_base_url is not None
+            else time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
+        ),
+    )
 
     stop_event = threading.Event()
     shutdown_listener = None
@@ -424,42 +420,30 @@ def main() -> int:
         shutdown_listener.start()
 
     best_score = kb_scores.get_best_score(cfg.HIGH_SCORES_PATH)
-    if gamesense_base_url is not None and best_score is not None:
+    if gamesense_state.base_url is not None and best_score is not None:
         try:
             best_score_frame = kb_render.compose_best_score_frame(best_score)
-            kb_gamesense.send_frame(gamesense_base_url, best_score_frame)
+            kb_gamesense.send_frame(gamesense_state.base_url, best_score_frame)
             display_until = (
                 time.monotonic() + max(0.0, cfg.STARTUP_BEST_SCORE_DISPLAY_SECONDS)
             )
             while not stop_event.is_set() and time.monotonic() < display_until:
                 time.sleep(min(0.1, display_until - time.monotonic()))
         except (URLError, HTTPError, OSError) as exc:
-            gamesense_base_url = None
-            gamesense_last_error = f"send failed: {exc}"
-            gamesense_next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
+            gamesense_state.base_url = None
+            gamesense_state.last_error = f"send failed: {exc}"
+            gamesense_state.next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
 
-    key_counter = [0]
-    space_counter = [0]
-    other_counter = [0]
-    last_input_time = [time.monotonic()]
-    counter_lock = threading.Lock()
+    input_stats = kb_input.InputStats()
 
     keyboard_listener, mouse_listener = kb_input.start_ctrl_d_listener(
         stop_event,
-        key_counter,
-        space_counter,
-        other_counter,
-        last_input_time,
-        counter_lock,
+        input_stats,
     )
     tray_icon = kb_tray.start_tray_icon(stop_event)
 
-    warrior_state = "idle"
-    state_frame_index = 0
     last_seen_space_count = 0
     last_seen_other_count = 0
-    run_frame_index = 0
-    run_post_slide_remaining = 0
     was_sliding = right_sprite_x > right_sprite_target_x
     last_attack_end_keystrokes = 0
     monsters_killed = 0
@@ -468,15 +452,15 @@ def main() -> int:
     next_stats_save_at = time.monotonic() + stats_save_interval_seconds
     monster_refresh_active = False
     idle_refresh_done_for_current_idle = False
-    last_seen_input_time = last_input_time[0]
+    _, _, _, last_seen_input_time = input_stats.snapshot()
     kb_tray.update_tray_tooltip(
         tray_icon,
         format_tray_tooltip(
             warrior_level,
             monsters_killed,
-            key_counter[0],
-            gamesense_last_error,
-            gamesense_next_retry_at,
+            input_stats.snapshot()[0],
+            gamesense_state.last_error,
+            gamesense_state.next_retry_at,
         ),
     )
 
@@ -487,17 +471,7 @@ def main() -> int:
         while not stop_event.is_set():
             loop_start = time.monotonic()
 
-            (
-                gamesense_base_url,
-                reconnect_error,
-                gamesense_next_retry_at,
-            ) = retry_gamesense_connection_if_due(
-                gamesense_base_url,
-                gamesense_next_retry_at,
-                loop_start,
-            )
-            if reconnect_error is not None or gamesense_base_url is not None:
-                gamesense_last_error = reconnect_error
+            retry_gamesense_connection_if_due(gamesense_state, loop_start)
 
             delta_seconds = max(0.0, min(loop_start - last_loop_time, 0.25))
             last_loop_time = loop_start
@@ -518,20 +492,17 @@ def main() -> int:
             if is_sliding:
                 background_scroll_x += cfg.BACKGROUND_SCROLL_PX_PER_SECOND * delta_seconds
 
-            if (
-                was_sliding
-                and (not is_sliding)
-                and (warrior_state == "idle")
-                and (run_post_slide_remaining == 0)
-                and (run_frame_index != 0)
-            ):
-                run_post_slide_remaining = len(run_warrior_frames) - run_frame_index
+            warrior_controller.on_slide_state(
+                was_sliding,
+                is_sliding,
+            )
 
-            with counter_lock:
-                current_keypress_count = key_counter[0]
-                current_space_count = space_counter[0]
-                current_other_count = other_counter[0]
-                current_last_input_time = last_input_time[0]
+            (
+                current_keypress_count,
+                current_space_count,
+                current_other_count,
+                current_last_input_time,
+            ) = input_stats.snapshot()
 
             next_stats_save_at = maybe_save_current_stats(
                 loop_start,
@@ -563,128 +534,47 @@ def main() -> int:
             new_space_presses = max(0, current_space_count - last_seen_space_count)
             new_other_presses = max(0, current_other_count - last_seen_other_count)
 
-            (
-                next_state,
-                next_state_frame_index,
-                next_state_tick_accumulator,
-                next_active_slashfx_frames,
-            ) = maybe_start_warrior_action(
-                warrior_state,
+            warrior_controller.maybe_start_action(
                 is_sliding,
                 deathfx_active,
                 monster_refresh_active,
-                run_post_slide_remaining,
                 new_space_presses,
                 new_other_presses,
                 slashfx_frames,
             )
-            if next_state != warrior_state:
-                warrior_state = next_state
-                state_frame_index = next_state_frame_index
-                state_tick_accumulator = next_state_tick_accumulator
-                active_slashfx_frames = next_active_slashfx_frames
+            warrior_tile, current_slashfx_tile, attack_finished = warrior_controller.advance(
+                delta_seconds,
+                is_sliding,
+            )
 
-            current_slashfx_tile: List[List[int]] | None = None
+            if attack_finished:
+                current_keypress_count, _, _, _ = input_stats.snapshot()
 
-            if warrior_state == "attack":
-                if active_slashfx_frames is not None and attack_warrior_frames:
-                    attack_len = len(attack_warrior_frames)
-                    slash_len = len(active_slashfx_frames)
-                    if slash_len > 0:
-                        slash_frame_idx = min(
-                            slash_len - 1,
-                            int(state_frame_index * slash_len / attack_len),
-                        )
-                        current_slashfx_tile = active_slashfx_frames[slash_frame_idx]
-
-                warrior_tile = attack_warrior_frames[state_frame_index]
-                state_tick_accumulator, attack_advances = kb_progression.advance_frame_timer(
-                    state_tick_accumulator,
-                    delta_seconds,
-                    attack_seconds_per_frame,
+                damage_per_keystroke = kb_progression.compute_damage_per_keystroke(
+                    warrior_level
                 )
-                if attack_advances > 0:
-                    state_frame_index += attack_advances
-
-                if state_frame_index >= len(attack_warrior_frames):
-                    warrior_state = "idle"
-                    state_frame_index = 0
-                    state_tick_accumulator = 0.0
-                    active_slashfx_frames = None
-
-                    with counter_lock:
-                        current_keypress_count = key_counter[0]
-
-                    damage_per_keystroke = kb_progression.compute_damage_per_keystroke(
-                        warrior_level
-                    )
-                    attack_damage = max(
-                        0,
-                        (current_keypress_count - last_attack_end_keystrokes)
-                        * damage_per_keystroke,
-                    )
-                    last_attack_end_keystrokes = current_keypress_count
-                    right_sprite_value -= attack_damage
-
-                    if right_sprite_value <= 0:
-                        monsters_killed += 1
-                        player_xp += kb_progression.compute_monster_xp(
-                            current_monster_level
-                        )
-                        while player_xp >= kb_progression.xp_total_for_level(
-                            warrior_level + 1
-                        ):
-                            warrior_level += 1
-
-                        deathfx_active = True
-                        deathfx_frame_index = 0
-                        deathfx_tick_accumulator = 0.0
-                        right_sprite_x = right_sprite_target_x
-
-            elif warrior_state == "block":
-                warrior_tile = block_warrior_frames[state_frame_index]
-                state_tick_accumulator, block_advances = kb_progression.advance_frame_timer(
-                    state_tick_accumulator,
-                    delta_seconds,
-                    block_seconds_per_frame,
+                attack_damage = max(
+                    0,
+                    (current_keypress_count - last_attack_end_keystrokes)
+                    * damage_per_keystroke,
                 )
-                if block_advances > 0:
-                    state_frame_index += block_advances
-                if state_frame_index >= len(block_warrior_frames):
-                    warrior_state = "idle"
-                    state_frame_index = 0
-                    state_tick_accumulator = 0.0
+                last_attack_end_keystrokes = current_keypress_count
+                right_sprite_value -= attack_damage
 
-            else:
-                if is_sliding or run_post_slide_remaining > 0:
-                    warrior_tile = run_warrior_frames[run_frame_index]
-                    run_tick_accumulator, run_advances = kb_progression.advance_frame_timer(
-                        run_tick_accumulator,
-                        delta_seconds,
-                        run_seconds_per_frame,
+                if right_sprite_value <= 0:
+                    monsters_killed += 1
+                    player_xp += kb_progression.compute_monster_xp(
+                        current_monster_level
                     )
-                    if run_advances > 0:
-                        run_frame_index = (run_frame_index + run_advances) % len(
-                            run_warrior_frames
-                        )
-                    if (not is_sliding) and run_post_slide_remaining > 0 and run_advances > 0:
-                        run_post_slide_remaining = max(
-                            0,
-                            run_post_slide_remaining - run_advances,
-                        )
-                else:
-                    warrior_tile = idle_warrior_frames[idle_frame_index]
-                    idle_tick_accumulator, idle_advances = kb_progression.advance_frame_timer(
-                        idle_tick_accumulator,
-                        delta_seconds,
-                        idle_seconds_per_frame,
-                    )
-                    if idle_advances > 0:
-                        idle_frame_index = (idle_frame_index + idle_advances) % len(
-                            idle_warrior_frames
-                        )
-                    run_frame_index = 0
-                    run_tick_accumulator = 0.0
+                    while player_xp >= kb_progression.xp_total_for_level(
+                        warrior_level + 1
+                    ):
+                        warrior_level += 1
+
+                    deathfx_active = True
+                    deathfx_frame_index = 0
+                    deathfx_tick_accumulator = 0.0
+                    right_sprite_x = right_sprite_target_x
 
             if deathfx_active:
                 right_sprite_tile = deathfx_frames[deathfx_frame_index]
@@ -723,32 +613,24 @@ def main() -> int:
             )
 
             combined_frame = kb_render.compose_frame(
-                background_tile,
-                int(background_scroll_x),
-                right_sprite_tile,
-                int(right_sprite_x),
-                warrior_tile,
-                cfg.LEFT_SPRITE_X,
-                warrior_level,
-                current_keypress_count,
-                right_sprite_value,
-                right_sprite_max_hp,
-                show_health_bar,
-                show_hud,
-                current_slashfx_tile,
+                kb_render.RenderState(
+                    background_tile=background_tile,
+                    background_scroll_x=int(background_scroll_x),
+                    right_sprite_tile=right_sprite_tile,
+                    right_sprite_x=int(right_sprite_x),
+                    left_sprite_tile=warrior_tile,
+                    left_sprite_x=cfg.LEFT_SPRITE_X,
+                    warrior_level=warrior_level,
+                    keypress_count=current_keypress_count,
+                    right_sprite_value=right_sprite_value,
+                    right_sprite_max_value=right_sprite_max_hp,
+                    show_health_bar=show_health_bar,
+                    show_hud=show_hud,
+                    slashfx_tile=current_slashfx_tile,
+                )
             )
 
-            (
-                gamesense_base_url,
-                send_error,
-                send_retry_at,
-            ) = send_frame_with_retry(gamesense_base_url, combined_frame)
-            if send_error is not None:
-                gamesense_last_error = send_error
-                gamesense_next_retry_at = send_retry_at
-            elif gamesense_base_url is not None:
-                gamesense_last_error = None
-                gamesense_next_retry_at = 0.0
+            send_frame_with_retry(gamesense_state, combined_frame)
 
             kb_tray.update_tray_tooltip(
                 tray_icon,
@@ -756,8 +638,8 @@ def main() -> int:
                     warrior_level,
                     monsters_killed,
                     current_keypress_count,
-                    gamesense_last_error,
-                    gamesense_next_retry_at,
+                    gamesense_state.last_error,
+                    gamesense_state.next_retry_at,
                 ),
             )
 
@@ -810,8 +692,7 @@ def main() -> int:
             except Exception:
                 pass
 
-        with counter_lock:
-            final_keystrokes = key_counter[0]
+        final_keystrokes, _, _, _ = input_stats.snapshot()
 
         top_place: int | None = None
         try:
@@ -825,7 +706,7 @@ def main() -> int:
         except OSError as exc:
             print(f"Warning: could not save high scores: {exc}", file=sys.stderr)
 
-        if gamesense_base_url is not None:
+        if gamesense_state.base_url is not None:
             try:
                 summary_frame = kb_render.compose_shutdown_summary_frame(
                     final_keystrokes,
@@ -833,12 +714,12 @@ def main() -> int:
                     warrior_level,
                     top_place,
                 )
-                kb_gamesense.send_frame(gamesense_base_url, summary_frame)
+                kb_gamesense.send_frame(gamesense_state.base_url, summary_frame)
                 time.sleep(5)
             except (URLError, HTTPError, OSError):
                 pass
 
-            kb_gamesense.clear_and_stop(gamesense_base_url)
+            kb_gamesense.clear_and_stop(gamesense_state.base_url)
 
     return 0
 

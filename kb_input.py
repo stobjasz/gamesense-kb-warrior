@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import List
+from dataclasses import dataclass, field
 
 from pynput import keyboard, mouse
 
@@ -13,28 +13,40 @@ def _is_space_key(key: keyboard.Key | keyboard.KeyCode) -> bool:
     )
 
 
-def _record_input_release(
-    key_counter: List[int],
-    space_counter: List[int],
-    other_counter: List[int],
-    last_input_time: List[float],
-    is_space: bool,
-) -> None:
-    last_input_time[0] = time.monotonic()
-    key_counter[0] += 1
-    if is_space:
-        space_counter[0] += 1
-    else:
-        other_counter[0] += 1
+@dataclass
+class InputStats:
+    key_count: int = 0
+    space_count: int = 0
+    other_count: int = 0
+    last_input_time: float = field(default_factory=time.monotonic)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def mark_input_started(self) -> None:
+        with self.lock:
+            self.last_input_time = time.monotonic()
+
+    def record_release(self, is_space: bool) -> None:
+        with self.lock:
+            self.last_input_time = time.monotonic()
+            self.key_count += 1
+            if is_space:
+                self.space_count += 1
+            else:
+                self.other_count += 1
+
+    def snapshot(self) -> tuple[int, int, int, float]:
+        with self.lock:
+            return (
+                self.key_count,
+                self.space_count,
+                self.other_count,
+                self.last_input_time,
+            )
 
 
 def start_ctrl_d_listener(
     stop_event: threading.Event,
-    key_counter: List[int],
-    space_counter: List[int],
-    other_counter: List[int],
-    last_input_time: List[float],
-    counter_lock: threading.Lock,
+    input_stats: InputStats,
 ) -> tuple[keyboard.Listener, mouse.Listener]:
     ctrl_pressed = False
     alt_pressed = False
@@ -66,8 +78,7 @@ def start_ctrl_d_listener(
 
         # Start tracking a keypress cycle on first key-down only (ignores repeats while held).
         if key not in pressed_keys:
-            with counter_lock:
-                last_input_time[0] = time.monotonic()
+            input_stats.mark_input_started()
         pressed_keys.add(key)
 
         return None
@@ -77,14 +88,7 @@ def start_ctrl_d_listener(
 
         if key in pressed_keys:
             pressed_keys.discard(key)
-            with counter_lock:
-                _record_input_release(
-                    key_counter,
-                    space_counter,
-                    other_counter,
-                    last_input_time,
-                    _is_space_key(key),
-                )
+            input_stats.record_release(_is_space_key(key))
 
         if is_ctrl_key(key):
             ctrl_pressed = False
@@ -98,21 +102,13 @@ def start_ctrl_d_listener(
 
         if pressed:
             if button not in pressed_mouse_buttons:
-                with counter_lock:
-                    last_input_time[0] = time.monotonic()
+                input_stats.mark_input_started()
             pressed_mouse_buttons.add(button)
             return None
 
         if button in pressed_mouse_buttons:
             pressed_mouse_buttons.discard(button)
-            with counter_lock:
-                _record_input_release(
-                    key_counter,
-                    space_counter,
-                    other_counter,
-                    last_input_time,
-                    button == mouse.Button.right,
-                )
+            input_stats.record_release(button == mouse.Button.right)
 
         return None
 
