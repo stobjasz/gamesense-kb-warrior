@@ -195,6 +195,146 @@ def format_tray_tooltip(
     return f"{stats_line}\n{error_line}\n{retry_line}"
 
 
+def retry_gamesense_connection_if_due(
+    gamesense_base_url: str | None,
+    gamesense_next_retry_at: float,
+    loop_start: float,
+) -> tuple[str | None, str | None, float]:
+    if gamesense_base_url is not None or loop_start < gamesense_next_retry_at:
+        return gamesense_base_url, None, gamesense_next_retry_at
+
+    gamesense_base_url, connect_error = kb_gamesense.connect_gamesense_with_error()
+    if gamesense_base_url is None:
+        return (
+            None,
+            connect_error or "GameSense reconnect failed",
+            loop_start + cfg.GAMESENSE_RETRY_SECONDS,
+        )
+    return gamesense_base_url, None, 0.0
+
+
+def maybe_save_current_stats(
+    loop_start: float,
+    next_stats_save_at: float,
+    stats_save_interval_seconds: float,
+    session_started_at: str,
+    current_keypress_count: int,
+    monsters_killed: int,
+    warrior_level: int,
+) -> float:
+    if stats_save_interval_seconds <= 0 or loop_start < next_stats_save_at:
+        return next_stats_save_at
+
+    try:
+        kb_scores.update_current_stats(
+            cfg.HIGH_SCORES_PATH,
+            session_started_at,
+            current_keypress_count,
+            monsters_killed,
+            warrior_level,
+        )
+    except OSError as exc:
+        print(
+            f"Warning: could not update current stats: {exc}",
+            file=sys.stderr,
+        )
+    return loop_start + stats_save_interval_seconds
+
+
+def maybe_start_warrior_action(
+    warrior_state: str,
+    is_sliding: bool,
+    deathfx_active: bool,
+    monster_refresh_active: bool,
+    run_post_slide_remaining: int,
+    new_space_presses: int,
+    new_other_presses: int,
+    slashfx_frames: List[List[List[int]]],
+) -> tuple[str, int, float, List[List[List[int]]] | None]:
+    if (
+        is_sliding
+        or deathfx_active
+        or monster_refresh_active
+        or warrior_state != "idle"
+        or run_post_slide_remaining != 0
+    ):
+        return warrior_state, 0, 0.0, None
+
+    if new_space_presses > 0:
+        return "block", 0, 0.0, None
+
+    if new_other_presses > 0:
+        return "attack", 0, 0.0, slashfx_frames
+
+    return warrior_state, 0, 0.0, None
+
+
+def send_frame_with_retry(
+    gamesense_base_url: str | None,
+    combined_frame: dict,
+) -> tuple[str | None, str | None, float]:
+    if gamesense_base_url is None:
+        return None, None, 0.0
+
+    try:
+        kb_gamesense.send_frame(gamesense_base_url, combined_frame)
+        return gamesense_base_url, None, 0.0
+    except (URLError, HTTPError, OSError) as exc:
+        return (
+            None,
+            f"send failed: {exc}",
+            time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS,
+        )
+
+
+def update_monster_slide_and_refresh(
+    monster_refresh_active: bool,
+    right_sprite_x: float,
+    right_sprite_target_x: float,
+    delta_seconds: float,
+    character_frames: List[List[List[int]]],
+    warrior_level: int,
+) -> tuple[bool, float, float, int, List[List[List[int]]], int]:
+    selected_character_frames: List[List[List[int]]] | None = None
+    right_sprite_max_hp = 0
+    right_sprite_frame_index = 0
+
+    if monster_refresh_active:
+        right_sprite_x = min(
+            cfg.RIGHT_SPRITE_START_X,
+            right_sprite_x + cfg.RIGHT_SPRITE_SLIDE_PX_PER_SECOND * delta_seconds,
+        )
+
+        if right_sprite_x >= cfg.RIGHT_SPRITE_START_X:
+            (
+                selected_character_frames,
+                right_sprite_target_x,
+                right_sprite_max_hp,
+            ) = kb_sprites.spawn_right_sprite(
+                character_frames,
+                cfg.LEFT_SPRITE_X,
+                cfg.LEFT_SPRITE_COLLISION_RIGHTMOST,
+                warrior_level,
+            )
+            right_sprite_x = float(cfg.RIGHT_SPRITE_START_X)
+            right_sprite_frame_index = 0
+            monster_refresh_active = False
+    elif right_sprite_x > right_sprite_target_x:
+        right_sprite_x = max(
+            right_sprite_target_x,
+            right_sprite_x - cfg.RIGHT_SPRITE_SLIDE_PX_PER_SECOND * delta_seconds,
+        )
+
+    return (
+        monster_refresh_active,
+        right_sprite_x,
+        right_sprite_target_x,
+        right_sprite_max_hp,
+        selected_character_frames,
+        right_sprite_frame_index,
+    )
+
+
 def main() -> int:
     instance_lock = kb_lock.acquire_instance_lock()
     if instance_lock is None:
@@ -347,14 +487,17 @@ def main() -> int:
         while not stop_event.is_set():
             loop_start = time.monotonic()
 
-            if gamesense_base_url is None and loop_start >= gamesense_next_retry_at:
-                gamesense_base_url, connect_error = kb_gamesense.connect_gamesense_with_error()
-                if gamesense_base_url is None:
-                    gamesense_last_error = connect_error or "GameSense reconnect failed"
-                    gamesense_next_retry_at = loop_start + cfg.GAMESENSE_RETRY_SECONDS
-                else:
-                    gamesense_last_error = None
-                    gamesense_next_retry_at = 0.0
+            (
+                gamesense_base_url,
+                reconnect_error,
+                gamesense_next_retry_at,
+            ) = retry_gamesense_connection_if_due(
+                gamesense_base_url,
+                gamesense_next_retry_at,
+                loop_start,
+            )
+            if reconnect_error is not None or gamesense_base_url is not None:
+                gamesense_last_error = reconnect_error
 
             delta_seconds = max(0.0, min(loop_start - last_loop_time, 0.25))
             last_loop_time = loop_start
@@ -390,24 +533,15 @@ def main() -> int:
                 current_other_count = other_counter[0]
                 current_last_input_time = last_input_time[0]
 
-            if (
-                stats_save_interval_seconds > 0
-                and loop_start >= next_stats_save_at
-            ):
-                try:
-                    kb_scores.update_current_stats(
-                        cfg.HIGH_SCORES_PATH,
-                        session_started_at,
-                        current_keypress_count,
-                        monsters_killed,
-                        warrior_level,
-                    )
-                except OSError as exc:
-                    print(
-                        f"Warning: could not update current stats: {exc}",
-                        file=sys.stderr,
-                    )
-                next_stats_save_at = loop_start + stats_save_interval_seconds
+            next_stats_save_at = maybe_save_current_stats(
+                loop_start,
+                next_stats_save_at,
+                stats_save_interval_seconds,
+                session_started_at,
+                current_keypress_count,
+                monsters_killed,
+                warrior_level,
+            )
 
             if current_last_input_time != last_seen_input_time:
                 idle_refresh_done_for_current_idle = False
@@ -429,22 +563,26 @@ def main() -> int:
             new_space_presses = max(0, current_space_count - last_seen_space_count)
             new_other_presses = max(0, current_other_count - last_seen_other_count)
 
-            if (
-                (not is_sliding)
-                and (not deathfx_active)
-                and (not monster_refresh_active)
-                and (warrior_state == "idle")
-                and (run_post_slide_remaining == 0)
-            ):
-                if new_space_presses > 0:
-                    warrior_state = "block"
-                    state_frame_index = 0
-                    state_tick_accumulator = 0.0
-                elif new_other_presses > 0:
-                    warrior_state = "attack"
-                    state_frame_index = 0
-                    state_tick_accumulator = 0.0
-                    active_slashfx_frames = slashfx_frames
+            (
+                next_state,
+                next_state_frame_index,
+                next_state_tick_accumulator,
+                next_active_slashfx_frames,
+            ) = maybe_start_warrior_action(
+                warrior_state,
+                is_sliding,
+                deathfx_active,
+                monster_refresh_active,
+                run_post_slide_remaining,
+                new_space_presses,
+                new_other_presses,
+                slashfx_frames,
+            )
+            if next_state != warrior_state:
+                warrior_state = next_state
+                state_frame_index = next_state_frame_index
+                state_tick_accumulator = next_state_tick_accumulator
+                active_slashfx_frames = next_active_slashfx_frames
 
             current_slashfx_tile: List[List[int]] | None = None
 
@@ -600,15 +738,17 @@ def main() -> int:
                 current_slashfx_tile,
             )
 
-            if gamesense_base_url is not None:
-                try:
-                    kb_gamesense.send_frame(gamesense_base_url, combined_frame)
-                    gamesense_last_error = None
-                    gamesense_next_retry_at = 0.0
-                except (URLError, HTTPError, OSError) as exc:
-                    gamesense_base_url = None
-                    gamesense_last_error = f"send failed: {exc}"
-                    gamesense_next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
+            (
+                gamesense_base_url,
+                send_error,
+                send_retry_at,
+            ) = send_frame_with_retry(gamesense_base_url, combined_frame)
+            if send_error is not None:
+                gamesense_last_error = send_error
+                gamesense_next_retry_at = send_retry_at
+            elif gamesense_base_url is not None:
+                gamesense_last_error = None
+                gamesense_next_retry_at = 0.0
 
             kb_tray.update_tray_tooltip(
                 tray_icon,
@@ -624,33 +764,27 @@ def main() -> int:
             last_seen_space_count = current_space_count
             last_seen_other_count = current_other_count
 
-            if monster_refresh_active:
-                right_sprite_x = min(
-                    cfg.RIGHT_SPRITE_START_X,
-                    right_sprite_x + cfg.RIGHT_SPRITE_SLIDE_PX_PER_SECOND * delta_seconds,
-                )
-
-                if right_sprite_x >= cfg.RIGHT_SPRITE_START_X:
-                    (
-                        selected_character_frames,
-                        right_sprite_target_x,
-                        right_sprite_max_hp,
-                    ) = kb_sprites.spawn_right_sprite(
-                        character_frames,
-                        cfg.LEFT_SPRITE_X,
-                        cfg.LEFT_SPRITE_COLLISION_RIGHTMOST,
-                        warrior_level,
-                    )
-                    current_monster_level = warrior_level
-                    right_sprite_value = right_sprite_max_hp
-                    right_sprite_x = float(cfg.RIGHT_SPRITE_START_X)
-                    right_sprite_frame_index = 0
-                    monster_refresh_active = False
-            elif right_sprite_x > right_sprite_target_x:
-                right_sprite_x = max(
-                    right_sprite_target_x,
-                    right_sprite_x - cfg.RIGHT_SPRITE_SLIDE_PX_PER_SECOND * delta_seconds,
-                )
+            (
+                monster_refresh_active,
+                right_sprite_x,
+                right_sprite_target_x,
+                refreshed_max_hp,
+                refreshed_character_frames,
+                refreshed_frame_index,
+            ) = update_monster_slide_and_refresh(
+                monster_refresh_active,
+                right_sprite_x,
+                right_sprite_target_x,
+                delta_seconds,
+                character_frames,
+                warrior_level,
+            )
+            if refreshed_character_frames is not None:
+                selected_character_frames = refreshed_character_frames
+                current_monster_level = warrior_level
+                right_sprite_max_hp = refreshed_max_hp
+                right_sprite_value = right_sprite_max_hp
+                right_sprite_frame_index = refreshed_frame_index
 
             was_sliding = right_sprite_x > right_sprite_target_x
             remaining = update_interval - (time.monotonic() - loop_start)
