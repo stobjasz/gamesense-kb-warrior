@@ -9,6 +9,7 @@ from __future__ import annotations
 import atexit
 import ctypes
 import ctypes.wintypes as wt
+import random
 import sys
 import threading
 import time
@@ -233,9 +234,9 @@ def maybe_save_stats(session: SessionState, loop_start: float, keystrokes: int) 
     session.next_stats_save_at = loop_start + session.save_interval
 
 
-def spawn_monster(character_frames, level: int) -> tuple:
+def spawn_monster(character_frames, level: int, warrior_x: int) -> tuple:
     frames, target_x, max_hp = kb_sprites.spawn_right_sprite(
-        character_frames, cfg.LEFT_SPRITE_X, cfg.LEFT_SPRITE_COLLISION_RIGHTMOST, level)
+        character_frames, warrior_x, cfg.LEFT_SPRITE_COLLISION_RIGHTMOST, level)
     return frames, target_x, max_hp
 
 
@@ -275,11 +276,19 @@ def main() -> int:
     right_spf      = spf(cfg.RIGHT_SPRITE_CYCLE_SECONDS, cfg.FRAMES_PER_CHARACTER)
     deathfx_spf    = spf(cfg.DEATH_FX_DURATION_SECONDS, len(deathfx_frames))
 
-    # Initial monster
+    # Initial monster + warrior horizontal positioning
     session = SessionState()
     session.save_interval = max(0.0, cfg.CURRENT_STATS_SAVE_INTERVAL_SECONDS)
 
-    mon_frames, mon_target_x, mon_max_hp = spawn_monster(character_frames, session.warrior_level)
+    warrior_x = float(cfg.LEFT_SPRITE_X)
+    warrior_target_x = float(cfg.LEFT_SPRITE_X)
+
+    def pick_warrior_spawn_target_x(current_x: float) -> float:
+        delta = random.randint(-cfg.WARRIOR_SPAWN_SHIFT_MAX_PX, cfg.WARRIOR_SPAWN_SHIFT_MAX_PX)
+        return float(min(cfg.WARRIOR_MAX_X, max(cfg.WARRIOR_MIN_X, int(round(current_x)) + delta)))
+
+    warrior_target_x = pick_warrior_spawn_target_x(warrior_x)
+    mon_frames, mon_target_x, mon_max_hp = spawn_monster(character_frames, session.warrior_level, int(round(warrior_target_x)))
     monster = MonsterState(
         frames=mon_frames, target_x=mon_target_x, max_hp=mon_max_hp, hp=mon_max_hp,
         level=session.warrior_level, x=float(cfg.RIGHT_SPRITE_START_X),
@@ -353,6 +362,10 @@ def main() -> int:
 
             if is_sliding:
                 background_scroll_x += cfg.BACKGROUND_SCROLL_PX_PER_SECOND * delta
+                if warrior_x < warrior_target_x:
+                    warrior_x = min(warrior_target_x, warrior_x + cfg.WARRIOR_SHIFT_SPEED_PX_PER_SECOND * delta)
+                elif warrior_x > warrior_target_x:
+                    warrior_x = max(warrior_target_x, warrior_x - cfg.WARRIOR_SHIFT_SPEED_PX_PER_SECOND * delta)
 
             warrior_controller.on_slide_state(was_sliding, is_sliding)
 
@@ -408,7 +421,12 @@ def main() -> int:
                     deathfx_active = False
                     deathfx_frame_index = 0
                     deathfx_tick_acc = 0.0
-                    mon_frames, mon_target_x, mon_max_hp = spawn_monster(character_frames, session.warrior_level)
+                    warrior_target_x = pick_warrior_spawn_target_x(warrior_x)
+                    mon_frames, mon_target_x, mon_max_hp = spawn_monster(
+                        character_frames,
+                        session.warrior_level,
+                        int(round(warrior_target_x)),
+                    )
                     monster = MonsterState(
                         frames=mon_frames, target_x=mon_target_x, max_hp=mon_max_hp, hp=mon_max_hp,
                         level=session.warrior_level, x=float(cfg.RIGHT_SPRITE_START_X),
@@ -420,7 +438,12 @@ def main() -> int:
             if monster.refresh_active:
                 monster.x = min(cfg.RIGHT_SPRITE_START_X, monster.x + cfg.RIGHT_SPRITE_SLIDE_PX_PER_SECOND * delta)
                 if monster.x >= cfg.RIGHT_SPRITE_START_X:
-                    mon_frames, mon_target_x, mon_max_hp = spawn_monster(character_frames, session.warrior_level)
+                    warrior_target_x = pick_warrior_spawn_target_x(warrior_x)
+                    mon_frames, mon_target_x, mon_max_hp = spawn_monster(
+                        character_frames,
+                        session.warrior_level,
+                        int(round(warrior_target_x)),
+                    )
                     monster = MonsterState(
                         frames=mon_frames, target_x=mon_target_x, max_hp=mon_max_hp, hp=mon_max_hp,
                         level=session.warrior_level, x=float(cfg.RIGHT_SPRITE_START_X),
@@ -438,7 +461,7 @@ def main() -> int:
                 right_sprite_tile=right_sprite_tile,
                 right_sprite_x=int(monster.x),
                 left_sprite_tile=warrior_tile,
-                left_sprite_x=cfg.LEFT_SPRITE_X,
+                left_sprite_x=int(warrior_x),
                 warrior_level=session.warrior_level,
                 keypress_count=keys,
                 right_sprite_value=monster.hp,

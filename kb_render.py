@@ -135,7 +135,7 @@ def compose_frame(state: RenderState) -> List[int]:
     draw_tile_on_canvas(canvas, state.left_sprite_tile, state.left_sprite_x, HEIGHT - TILE_SIZE)
 
     if state.slashfx_tile is not None:
-        slashfx_x = LEFT_SPRITE_X + ((state.right_sprite_x - LEFT_SPRITE_X) // 2) + SLASHFX_X_OFFSET
+        slashfx_x = state.left_sprite_x + ((state.right_sprite_x - state.left_sprite_x) // 2) + SLASHFX_X_OFFSET
         draw_tile_on_canvas(canvas, state.slashfx_tile, slashfx_x, HEIGHT - TILE_SIZE)
 
     level_text_right = -2
