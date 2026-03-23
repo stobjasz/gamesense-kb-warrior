@@ -28,6 +28,7 @@ WARRIOR_ATTACK_PATH = ASSETS_PATH / "warriorattack-Sheet.png"
 DEATH_FX_PATH = ASSETS_PATH / "deathfx-Sheet.png"
 SLASH_FX_PATH = ASSETS_PATH / "warriorslashfx-Sheet.png"
 DROPS_PATH = ASSETS_PATH / "drops"
+SKY_BACKGROUND_PATH = ASSETS_PATH / "sky.png"
 
 TILE_SIZE = 32
 DROP_TILE_SIZE = 16

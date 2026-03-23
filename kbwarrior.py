@@ -265,6 +265,7 @@ def main() -> int:
         deathfx_frames = kb_sprites.load_sprite_strip_frames(cfg.DEATH_FX_PATH, 4)
         slashfx_frames = kb_sprites.load_slashfx_frames(cfg.SLASH_FX_PATH)
         drop_tiles = kb_sprites.load_drop_tiles(cfg.DROPS_PATH)
+        background_tile = kb_sprites.load_scrolling_background_tile(cfg.SKY_BACKGROUND_PATH)
     except (OSError, ValueError) as exc:
         print(f"Asset loading error: {exc}", file=sys.stderr)
         return 1
@@ -304,7 +305,6 @@ def main() -> int:
         level=session.warrior_level, x=float(cfg.RIGHT_SPRITE_START_X),
     )
 
-    background_tile     = kb_render.make_minimal_background_tile()
     background_scroll_x = 0.0
     deathfx_active      = False
     deathfx_frame_index = 0

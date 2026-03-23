@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
-from kb_config import BACKGROUND_DRAW_START_Y, BACKGROUND_TILE_SIZE, FONT_5X7, HEALTH_BAR_WIDTH, HEALTH_BAR_Y, HEIGHT, LEFT_SPRITE_X, SLASHFX_X_OFFSET, TILE_SIZE, WIDTH
+from kb_config import BACKGROUND_TILE_SIZE, FONT_5X7, HEALTH_BAR_WIDTH, HEALTH_BAR_Y, HEIGHT, LEFT_SPRITE_X, SLASHFX_X_OFFSET, TILE_SIZE, WIDTH
 
 
 @dataclass(frozen=True)
@@ -78,11 +78,25 @@ def draw_tile_on_canvas(canvas: List[List[int]], tile: List[List[int]], x_offset
 def draw_scrolling_background(canvas: List[List[int]], tile: List[List[int]], scroll_x: int) -> None:
     tile_w, tile_h = len(tile[0]), len(tile)
     offset_x = scroll_x % tile_w
-    for y in range(BACKGROUND_DRAW_START_Y, HEIGHT):
-        ty = y % tile_h
-        for x in range(WIDTH):
+    # Parallax: move horizon shape at a slower rate than the star background.
+    horizon_scroll_x = (scroll_x // 3)
+
+    # Irregular horizon near the bottom; stars only above it.
+    horizon_base_y = 25
+    horizon_offsets = [0, 0, -1, -1, -2, -1, 0, 1, 1, 0, -1, -2, -1, 0, 1, 2, 1, 0]
+
+    for x in range(WIDTH):
+        horizon_idx = (x + horizon_scroll_x) % len(horizon_offsets)
+        horizon_y = max(0, min(HEIGHT - 1, horizon_base_y + horizon_offsets[horizon_idx]))
+
+        # Draw scrolling sky from the top to just above horizon.
+        for y in range(0, horizon_y):
+            ty = y % tile_h
             if tile[ty][(x + offset_x) % tile_w]:
                 canvas[y][x] = 1
+
+        # Draw the horizon line itself.
+        canvas[horizon_y][x] = 1
 
 
 def draw_rounded_health_bar(canvas: List[List[int]], x: int, y: int, width: int, current: int, max_val: int) -> None:

@@ -17,3 +17,4 @@ The application currently supports **Windows** and runs quietly in the backgroun
 - Monsters: https://butterhands.itch.io/doomsphere-charset
 - Warrior: https://daliszito.itch.io/1-bit-medieval-character-pack
 - Drops: https://nikoichu.itch.io/pixel-icons
+- Background: https://rumblecade.itch.io/lunar-surface

@@ -123,6 +123,28 @@ def load_drop_tiles(path: Path) -> List[List[List[int]]]:
     return tiles
 
 
+def load_scrolling_background_tile(path: Path) -> List[List[int]]:
+    """Load a horizontal strip image (e.g. 5x 32px tiles) as one seamless scrolling tile."""
+    if not path.is_file():
+        raise FileNotFoundError(f"Background image not found: {path}")
+    image = Image.open(path).convert("RGBA")
+    w, h = image.size
+    if h != TILE_SIZE:
+        raise ValueError(f"Background '{path}' height must be {TILE_SIZE}px")
+    if w < TILE_SIZE:
+        raise ValueError(f"Background '{path}' width must be at least {TILE_SIZE}px")
+    # Background should be binary: stars/bright pixels = 1, black space = 0.
+    px = image.load()
+    threshold = 255 * 3 // 2
+    canvas = [[0] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a > 0 and (r + g + b) >= threshold:
+                canvas[y][x] = 1
+    return canvas
+
+
 def spawn_right_sprite(all_characters, left_sprite_x, left_collision_rightmost, monster_level):
     frames = random.choice(all_characters)
     target_x = compute_right_sprite_target_x(frames, left_sprite_x, left_collision_rightmost)
