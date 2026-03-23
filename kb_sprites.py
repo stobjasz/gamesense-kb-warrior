@@ -145,6 +145,94 @@ def load_scrolling_background_tile(path: Path) -> List[List[int]]:
     return canvas
 
 
+def load_corridor_background(brick_paths: List[Path], floor_path: Path) -> tuple[List[List[List[int]]], List[List[int]]]:
+    """Load corridor brick variants and floor layer as binary canvases."""
+    if not brick_paths:
+        raise ValueError("At least one corridor brick variant path is required")
+    for brick_path in brick_paths:
+        if not brick_path.is_file():
+            raise FileNotFoundError(f"Corridor brick image not found: {brick_path}")
+    if not floor_path.is_file():
+        raise FileNotFoundError(f"Corridor floor image not found: {floor_path}")
+
+    def _image_to_bright_binary_canvas(path: Path) -> List[List[int]]:
+        image = Image.open(path).convert("RGBA")
+        w, h = image.size
+        px = image.load()
+        threshold = 255 * 3 // 2
+        canvas = [[0] * w for _ in range(h)]
+        for y in range(h):
+            for x in range(w):
+                r, g, b, a = px[x, y]
+                if a > 0 and (r + g + b) >= threshold:
+                    canvas[y][x] = 1
+        return canvas
+
+    bricks = [_image_to_bright_binary_canvas(path) for path in brick_paths]
+    floor = _image_to_bright_binary_canvas(floor_path)
+
+    if not bricks[0] or not bricks[0][0]:
+        raise ValueError(f"Corridor brick image '{brick_paths[0]}' has invalid dimensions")
+    expected_w = len(bricks[0][0])
+    expected_h = len(bricks[0])
+    for i, brick in enumerate(bricks, start=1):
+        if not brick or not brick[0]:
+            raise ValueError(f"Corridor brick image '{brick_paths[i - 1]}' has invalid dimensions")
+        if len(brick) != expected_h or len(brick[0]) != expected_w:
+            raise ValueError("All corridor brick variants must have identical dimensions")
+    if not floor or not floor[0]:
+        raise ValueError(f"Corridor floor image '{floor_path}' has invalid dimensions")
+
+    return bricks, floor
+
+
+def load_corridor_door(path: Path) -> List[List[int]]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Corridor door image not found: {path}")
+    image = Image.open(path).convert("RGBA")
+    w, h = image.size
+    px = image.load()
+    threshold = 255 * 3 // 2
+    canvas = [[0] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a > 0 and (r + g + b) >= threshold:
+                canvas[y][x] = 1
+    return canvas
+
+
+def load_corridor_torch_frames(path: Path, frame_count: int = 2) -> List[List[List[int]]]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Corridor torch image not found: {path}")
+    if frame_count <= 0:
+        raise ValueError("Corridor torch frame_count must be positive")
+
+    image = Image.open(path).convert("RGBA")
+    w, h = image.size
+    if w % frame_count != 0:
+        raise ValueError(f"Corridor torch image '{path}' width must be divisible by {frame_count}")
+
+    frame_w = w // frame_count
+    if frame_w <= 0 or h <= 0:
+        raise ValueError(f"Corridor torch image '{path}' has invalid dimensions")
+
+    frames: List[List[List[int]]] = []
+    threshold = 255 * 3 // 2
+    for i in range(frame_count):
+        frame_img = image.crop((i * frame_w, 0, (i + 1) * frame_w, h))
+        px = frame_img.load()
+        frame = [[0] * frame_w for _ in range(h)]
+        for y in range(h):
+            for x in range(frame_w):
+                r, g, b, a = px[x, y]
+                if a > 0:
+                    frame[y][x] = 1 if (r + g + b) >= threshold else 2
+        frames.append(frame)
+
+    return frames
+
+
 def spawn_right_sprite(all_characters, left_sprite_x, left_collision_rightmost, monster_level):
     frames = random.choice(all_characters)
     target_x = compute_right_sprite_target_x(frames, left_sprite_x, left_collision_rightmost)

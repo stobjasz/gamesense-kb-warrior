@@ -265,7 +265,15 @@ def main() -> int:
         deathfx_frames = kb_sprites.load_sprite_strip_frames(cfg.DEATH_FX_PATH, 4)
         slashfx_frames = kb_sprites.load_slashfx_frames(cfg.SLASH_FX_PATH)
         drop_tiles = kb_sprites.load_drop_tiles(cfg.DROPS_PATH)
-        background_tile = kb_sprites.load_scrolling_background_tile(cfg.SKY_BACKGROUND_PATH)
+        background_brick_tiles, background_floor_tile = kb_sprites.load_corridor_background(
+            cfg.CORRIDOR_BRICK_VARIANT_PATHS,
+            cfg.CORRIDOR_FLOOR_PATH,
+        )
+        background_door_tile = kb_sprites.load_corridor_door(cfg.CORRIDOR_DOOR_PATH)
+        background_torch_frames = kb_sprites.load_corridor_torch_frames(
+            cfg.CORRIDOR_TORCH_PATH,
+            cfg.CORRIDOR_TORCH_FRAME_COUNT,
+        )
     except (OSError, ValueError) as exc:
         print(f"Asset loading error: {exc}", file=sys.stderr)
         return 1
@@ -306,6 +314,7 @@ def main() -> int:
     )
 
     background_scroll_x = 0.0
+    background_anim_tick = 0
     deathfx_active      = False
     deathfx_frame_index = 0
     deathfx_tick_acc    = 0.0
@@ -344,9 +353,9 @@ def main() -> int:
 
     last_seen_space   = 0
     last_seen_other   = 0
-    was_sliding       = monster.x > monster.target_x
-    idle_refresh_done = False
+    was_sliding = monster.x > monster.target_x
     _, _, _, last_input_time = input_stats.snapshot()
+    next_idle_refresh_at = last_input_time + cfg.MONSTER_REFRESH_AFTER_INACTIVITY_SECONDS
     session.next_stats_save_at = time.monotonic() + session.save_interval
 
     kb_tray.update_tray_tooltip(tray_icon, format_tray_tooltip(
@@ -385,16 +394,16 @@ def main() -> int:
             maybe_save_stats(session, loop_start, keys)
 
             if current_input_time != last_input_time:
-                idle_refresh_done = False
                 last_input_time = current_input_time
+                next_idle_refresh_at = current_input_time + cfg.MONSTER_REFRESH_AFTER_INACTIVITY_SECONDS
 
             inactivity = time.monotonic() - current_input_time
             show_hud    = inactivity < cfg.HUD_HIDE_AFTER_INACTIVITY_SECONDS
 
-            if (not idle_refresh_done and not monster.refresh_active and not deathfx_active
-                    and inactivity >= cfg.MONSTER_REFRESH_AFTER_INACTIVITY_SECONDS):
+            if (not monster.refresh_active and not deathfx_active
+                    and loop_start >= next_idle_refresh_at):
                 monster.refresh_active = True
-                idle_refresh_done = True
+                next_idle_refresh_at = loop_start + cfg.MONSTER_REFRESH_AFTER_INACTIVITY_SECONDS
 
             new_spaces = max(0, spaces - last_seen_space)
             new_others = max(0, others - last_seen_other)
@@ -498,8 +507,12 @@ def main() -> int:
                 drop_y = int(active_drop.y)
 
             frame = kb_render.compose_frame(kb_render.RenderState(
-                background_tile=background_tile,
-                background_scroll_x=int(background_scroll_x),
+                background_brick_tiles=background_brick_tiles,
+                background_floor_tile=background_floor_tile,
+                background_door_tile=background_door_tile,
+                background_torch_frames=background_torch_frames,
+                background_scroll_x=background_scroll_x,
+                background_anim_tick=background_anim_tick,
                 right_sprite_tile=right_sprite_tile,
                 right_sprite_x=int(monster.x),
                 left_sprite_tile=warrior_tile,
@@ -516,6 +529,7 @@ def main() -> int:
                 drop_y=drop_y,
                 show_drop=show_drop,
             ))
+            background_anim_tick += 1
             send_frame_with_retry(gs, frame)
 
             kb_tray.update_tray_tooltip(tray_icon, format_tray_tooltip(
