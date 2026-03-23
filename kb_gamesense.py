@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 from typing import List
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from kb_config import EVENT_NAME, GAME_NAME, HEIGHT, WIDTH
+
+
+def _blank_image_data() -> List[int]:
+    return [0] * ((WIDTH * HEIGHT + 7) // 8)
 
 
 def find_coreprops_file() -> Path | None:
@@ -67,7 +70,6 @@ def post_json(base_url: str, endpoint: str, payload: dict) -> None:
 
 
 def bind_screen_event(base_url: str) -> None:
-    default_image = [0] * ((WIDTH * HEIGHT + 7) // 8)
     payload = {
         "game": GAME_NAME,
         "event": EVENT_NAME,
@@ -82,7 +84,7 @@ def bind_screen_event(base_url: str) -> None:
                 "datas": [
                     {
                         "has-text": False,
-                        "image-data": default_image,
+                        "image-data": _blank_image_data(),
                     }
                 ],
             }
@@ -118,12 +120,8 @@ def connect_gamesense_with_error() -> tuple[str | None, str | None]:
             },
         )
         bind_screen_event(base_url)
-    except (URLError, HTTPError, OSError, ValueError, json.JSONDecodeError):
-        try:
-            err = sys.exc_info()[1]
-            err_text = str(err) if err is not None else "unknown GameSense error"
-        except Exception:
-            err_text = "unknown GameSense error"
+    except (URLError, HTTPError, OSError, ValueError, json.JSONDecodeError) as exc:
+        err_text = str(exc).strip() or "unknown GameSense error"
         return None, err_text
 
     return base_url, None
@@ -144,14 +142,13 @@ def send_frame(base_url: str, image_data: List[int]) -> None:
 
 
 def clear_and_stop(base_url: str) -> None:
-    blank_image = [0] * ((WIDTH * HEIGHT + 7) // 8)
     clear_payload = {
         "game": GAME_NAME,
         "event": EVENT_NAME,
         "data": {
             "value": 0,
             "frame": {
-                "image-data-128x40": blank_image,
+                "image-data-128x40": _blank_image_data(),
             },
         },
     }

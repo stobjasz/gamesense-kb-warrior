@@ -13,20 +13,27 @@ except ImportError:
     pystray = None
 
 
+ICON_SIZE = 64
+
+
+def _create_fallback_icon() -> Image.Image:
+    icon = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0, 0, 0, 0))
+    for y in range(16, 48):
+        for x in range(16, 48):
+            icon.putpixel((x, y), (255, 255, 255, 255))
+    return icon
+
+
 def create_tray_icon_image() -> Image.Image:
     if WARRIOR_IDLE_PATH.is_file():
         try:
             sheet = Image.open(WARRIOR_IDLE_PATH).convert("RGBA")
             frame = sheet.crop((0, 0, TILE_SIZE, TILE_SIZE))
-            return frame.resize((64, 64), Image.NEAREST)
+            return frame.resize((ICON_SIZE, ICON_SIZE), Image.NEAREST)
         except OSError:
             pass
 
-    icon = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    for y in range(16, 48):
-        for x in range(16, 48):
-            icon.putpixel((x, y), (255, 255, 255, 255))
-    return icon
+    return _create_fallback_icon()
 
 
 def start_tray_icon(stop_event: threading.Event):

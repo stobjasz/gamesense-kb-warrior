@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from kb_config import DAMAGE_BASE, DAMAGE_GROWTH, MONSTER_HP_BASE, MONSTER_HP_GROWTH, MONSTER_XP_BASE, MONSTER_XP_PER_LEVEL
+from kb_config import (
+    DAMAGE_BASE,
+    DAMAGE_GROWTH,
+    MONSTER_HP_BASE,
+    MONSTER_HP_GROWTH,
+    MONSTER_XP_BASE,
+    MONSTER_XP_PER_LEVEL,
+)
+
+
+def _scaled_stat(base: float, growth: float, level: int) -> int:
+    return max(1, int(round(base * (growth ** (level - 1)))))
 
 
 def compute_seconds_per_frame(duration_seconds: float, frame_count: int) -> float:
@@ -20,11 +31,11 @@ def advance_frame_timer(
 
 
 def compute_monster_hp(level: int) -> int:
-    return max(1, int(round(MONSTER_HP_BASE * (MONSTER_HP_GROWTH ** (level - 1)))))
+    return _scaled_stat(MONSTER_HP_BASE, MONSTER_HP_GROWTH, level)
 
 
 def compute_damage_per_keystroke(level: int) -> int:
-    return max(1, int(round(DAMAGE_BASE * (DAMAGE_GROWTH ** (level - 1)))))
+    return _scaled_stat(DAMAGE_BASE, DAMAGE_GROWTH, level)
 
 
 def compute_monster_xp(monster_level: int) -> int:

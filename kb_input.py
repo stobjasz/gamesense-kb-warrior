@@ -7,6 +7,27 @@ from typing import List
 from pynput import keyboard, mouse
 
 
+def _is_space_key(key: keyboard.Key | keyboard.KeyCode) -> bool:
+    return (key == keyboard.Key.space) or (
+        isinstance(key, keyboard.KeyCode) and key.char == " "
+    )
+
+
+def _record_input_release(
+    key_counter: List[int],
+    space_counter: List[int],
+    other_counter: List[int],
+    last_input_time: List[float],
+    is_space: bool,
+) -> None:
+    last_input_time[0] = time.monotonic()
+    key_counter[0] += 1
+    if is_space:
+        space_counter[0] += 1
+    else:
+        other_counter[0] += 1
+
+
 def start_ctrl_d_listener(
     stop_event: threading.Event,
     key_counter: List[int],
@@ -57,15 +78,13 @@ def start_ctrl_d_listener(
         if key in pressed_keys:
             pressed_keys.discard(key)
             with counter_lock:
-                last_input_time[0] = time.monotonic()
-                key_counter[0] += 1
-                is_space = (key == keyboard.Key.space) or (
-                    isinstance(key, keyboard.KeyCode) and key.char == " "
+                _record_input_release(
+                    key_counter,
+                    space_counter,
+                    other_counter,
+                    last_input_time,
+                    _is_space_key(key),
                 )
-                if is_space:
-                    space_counter[0] += 1
-                else:
-                    other_counter[0] += 1
 
         if is_ctrl_key(key):
             ctrl_pressed = False
@@ -87,12 +106,13 @@ def start_ctrl_d_listener(
         if button in pressed_mouse_buttons:
             pressed_mouse_buttons.discard(button)
             with counter_lock:
-                last_input_time[0] = time.monotonic()
-                key_counter[0] += 1
-                if button == mouse.Button.right:
-                    space_counter[0] += 1
-                else:
-                    other_counter[0] += 1
+                _record_input_release(
+                    key_counter,
+                    space_counter,
+                    other_counter,
+                    last_input_time,
+                    button == mouse.Button.right,
+                )
 
         return None
 

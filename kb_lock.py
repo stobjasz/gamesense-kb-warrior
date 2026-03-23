@@ -7,6 +7,20 @@ from pathlib import Path
 from kb_config import INSTANCE_LOCK_FILENAME
 
 
+def _close_fd_safely(lock_fd: int) -> None:
+    try:
+        os.close(lock_fd)
+    except OSError:
+        pass
+
+
+def _unlink_safely(lock_path: Path) -> None:
+    try:
+        lock_path.unlink()
+    except OSError:
+        pass
+
+
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -34,10 +48,7 @@ def acquire_instance_lock() -> tuple[int, Path] | None:
             if _pid_is_running(existing_pid):
                 return None
 
-            try:
-                lock_path.unlink()
-            except OSError:
-                return None
+            _unlink_safely(lock_path)
             continue
         except OSError:
             return None
@@ -46,14 +57,8 @@ def acquire_instance_lock() -> tuple[int, Path] | None:
             os.write(lock_fd, str(current_pid).encode("utf-8"))
             os.fsync(lock_fd)
         except OSError:
-            try:
-                os.close(lock_fd)
-            except OSError:
-                pass
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
+            _close_fd_safely(lock_fd)
+            _unlink_safely(lock_path)
             return None
 
         return lock_fd, lock_path
@@ -62,12 +67,5 @@ def acquire_instance_lock() -> tuple[int, Path] | None:
 
 
 def release_instance_lock(lock_fd: int, lock_path: Path) -> None:
-    try:
-        os.close(lock_fd)
-    except OSError:
-        pass
-
-    try:
-        lock_path.unlink()
-    except OSError:
-        pass
+    _close_fd_safely(lock_fd)
+    _unlink_safely(lock_path)

@@ -16,6 +16,33 @@ from kb_config import (
 )
 
 
+def _draw_centered_lines(canvas: List[List[int]], lines: List[str]) -> None:
+    line_height = 7
+    line_spacing = 1
+    total_height = len(lines) * line_height + max(0, len(lines) - 1) * line_spacing
+    start_y = max(0, (HEIGHT - total_height) // 2)
+
+    for idx, line in enumerate(lines):
+        line_width = measure_text_5x7_width(line)
+        x = max(0, (WIDTH - line_width) // 2)
+        y = start_y + idx * (line_height + line_spacing)
+        draw_text_5x7(canvas, line, x, y)
+
+
+def _extract_best_score_stats(best_score: dict | None) -> tuple[int, int, int]:
+    if not isinstance(best_score, dict):
+        return 0, 0, 1
+
+    try:
+        keystrokes = max(0, int(best_score.get("keystrokes", 0)))
+        monsters_killed = max(0, int(best_score.get("monsters_killed", 0)))
+        level = max(1, int(best_score.get("level", 1)))
+    except (TypeError, ValueError):
+        return 0, 0, 1
+
+    return keystrokes, monsters_killed, level
+
+
 def canvas_to_image_data(canvas: List[List[int]]) -> List[int]:
     packed: List[int] = []
     for row in canvas:
@@ -224,16 +251,7 @@ def compose_shutdown_summary_frame(
     if top_place is not None:
         lines.append(f"TOP:{top_place}")
 
-    line_height = 7
-    line_spacing = 1
-    total_height = len(lines) * line_height + max(0, len(lines) - 1) * line_spacing
-    start_y = max(0, (HEIGHT - total_height) // 2)
-
-    for idx, line in enumerate(lines):
-        line_width = measure_text_5x7_width(line)
-        x = max(0, (WIDTH - line_width) // 2)
-        y = start_y + idx * (line_height + line_spacing)
-        draw_text_5x7(canvas, line, x, y)
+    _draw_centered_lines(canvas, lines)
 
     return canvas_to_image_data(canvas)
 
@@ -241,16 +259,7 @@ def compose_shutdown_summary_frame(
 def compose_best_score_frame(best_score: dict | None) -> List[int]:
     canvas = [[0 for _ in range(WIDTH)] for _ in range(HEIGHT)]
 
-    keystrokes = 0
-    monsters_killed = 0
-    level = 1
-    if isinstance(best_score, dict):
-        try:
-            keystrokes = max(0, int(best_score.get("keystrokes", 0)))
-            monsters_killed = max(0, int(best_score.get("monsters_killed", 0)))
-            level = max(1, int(best_score.get("level", 1)))
-        except (TypeError, ValueError):
-            pass
+    keystrokes, monsters_killed, level = _extract_best_score_stats(best_score)
 
     lines = [
         f"TOP KEYS:{keystrokes}",
@@ -258,15 +267,6 @@ def compose_best_score_frame(best_score: dict | None) -> List[int]:
         f"LV:{level}",
     ]
 
-    line_height = 7
-    line_spacing = 1
-    total_height = len(lines) * line_height + max(0, len(lines) - 1) * line_spacing
-    start_y = max(0, (HEIGHT - total_height) // 2)
-
-    for idx, line in enumerate(lines):
-        line_width = measure_text_5x7_width(line)
-        x = max(0, (WIDTH - line_width) // 2)
-        y = start_y + idx * (line_height + line_spacing)
-        draw_text_5x7(canvas, line, x, y)
+    _draw_centered_lines(canvas, lines)
 
     return canvas_to_image_data(canvas)

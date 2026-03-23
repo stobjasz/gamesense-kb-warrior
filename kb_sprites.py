@@ -18,6 +18,19 @@ from kb_config import (
 from kb_progression import compute_monster_hp
 
 
+def _tile_to_canvas(tile_image: Image.Image) -> List[List[int]]:
+    tile_canvas = [[0 for _ in range(TILE_SIZE)] for _ in range(TILE_SIZE)]
+    px = tile_image.load()
+    threshold = 255 * 3 // 2
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            r, g, b, a = px[x, y]
+            if a == 0:
+                continue
+            tile_canvas[y][x] = 1 if (r + g + b) >= threshold else 2
+    return tile_canvas
+
+
 def get_tile_x_bounds(tile: List[List[int]]) -> tuple[int, int] | None:
     min_x = TILE_SIZE
     max_x = -1
@@ -81,16 +94,7 @@ def load_character_frames(path: Path) -> List[List[List[List[int]]]]:
                 tile_y = row * TILE_SIZE
                 tile = image.crop((tile_x, tile_y, tile_x + TILE_SIZE, tile_y + TILE_SIZE))
 
-                tile_canvas = [[0 for _ in range(TILE_SIZE)] for _ in range(TILE_SIZE)]
-                px = tile.load()
-                for y in range(TILE_SIZE):
-                    for x in range(TILE_SIZE):
-                        r, g, b, a = px[x, y]
-                        if a == 0:
-                            continue
-                        is_white = (r + g + b) >= (255 * 3 // 2)
-                        tile_canvas[y][x] = 1 if is_white else 2
-                char_frames.append(tile_canvas)
+                char_frames.append(_tile_to_canvas(tile))
             frames.append(char_frames)
 
     if not frames:
@@ -116,17 +120,7 @@ def load_sprite_strip_frames(path: Path, frame_count: int) -> List[List[List[int
         tile_x = frame_idx * TILE_SIZE
         tile = image.crop((tile_x, 0, tile_x + TILE_SIZE, TILE_SIZE))
 
-        tile_canvas = [[0 for _ in range(TILE_SIZE)] for _ in range(TILE_SIZE)]
-        px = tile.load()
-        for y in range(TILE_SIZE):
-            for x in range(TILE_SIZE):
-                r, g, b, a = px[x, y]
-                if a == 0:
-                    continue
-                is_white = (r + g + b) >= (255 * 3 // 2)
-                tile_canvas[y][x] = 1 if is_white else 2
-
-        frames.append(tile_canvas)
+        frames.append(_tile_to_canvas(tile))
 
     return frames
 

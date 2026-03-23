@@ -6,6 +6,27 @@ from pathlib import Path
 from typing import List
 
 
+def _normalize_score_entry(item: dict) -> dict | None:
+    try:
+        keystrokes = max(0, int(item.get("keystrokes", 0)))
+        monsters_killed = max(0, int(item.get("monsters_killed", 0)))
+        level = max(1, int(item.get("level", 1)))
+    except (TypeError, ValueError):
+        return None
+
+    return {
+        "started_at": str(item.get("started_at", "")),
+        "ended_at": str(item.get("ended_at", "")),
+        "keystrokes": keystrokes,
+        "monsters_killed": monsters_killed,
+        "level": level,
+    }
+
+
+def _score_sort_key(score: dict) -> tuple[int, str]:
+    return score["keystrokes"], score["ended_at"]
+
+
 def load_high_scores(path: Path) -> List[dict]:
     if not path.is_file():
         return []
@@ -24,26 +45,11 @@ def load_high_scores(path: Path) -> List[dict]:
         if not isinstance(item, dict):
             continue
 
-        try:
-            keystrokes = max(0, int(item.get("keystrokes", 0)))
-            monsters_killed = max(0, int(item.get("monsters_killed", 0)))
-            level = max(1, int(item.get("level", 1)))
-        except (TypeError, ValueError):
-            continue
+        normalized = _normalize_score_entry(item)
+        if normalized is not None:
+            scores.append(normalized)
 
-        started_at = str(item.get("started_at", ""))
-        ended_at = str(item.get("ended_at", ""))
-        scores.append(
-            {
-                "started_at": started_at,
-                "ended_at": ended_at,
-                "keystrokes": keystrokes,
-                "monsters_killed": monsters_killed,
-                "level": level,
-            }
-        )
-
-    scores.sort(key=lambda s: (s["keystrokes"], s["ended_at"]), reverse=True)
+    scores.sort(key=_score_sort_key, reverse=True)
     return scores
 
 
@@ -67,13 +73,17 @@ def upsert_high_score(
     level: int,
 ) -> int | None:
     scores = load_high_scores(path)
-    entry = {
-        "started_at": started_at,
-        "ended_at": datetime.now().isoformat(timespec="seconds"),
-        "keystrokes": max(0, int(keystrokes)),
-        "monsters_killed": max(0, int(monsters_killed)),
-        "level": max(1, int(level)),
-    }
+    entry = _normalize_score_entry(
+        {
+            "started_at": started_at,
+            "ended_at": datetime.now().isoformat(timespec="seconds"),
+            "keystrokes": keystrokes,
+            "monsters_killed": monsters_killed,
+            "level": level,
+        }
+    )
+    if entry is None:
+        return None
 
     replaced_existing = False
     for idx, score in enumerate(scores):
@@ -85,7 +95,7 @@ def upsert_high_score(
     if not replaced_existing:
         scores.append(entry)
 
-    scores.sort(key=lambda s: (s["keystrokes"], s["ended_at"]), reverse=True)
+    scores.sort(key=_score_sort_key, reverse=True)
     top_scores = scores[:10]
     save_high_scores(path, top_scores)
 
@@ -102,7 +112,7 @@ def update_current_stats(
     monsters_killed: int,
     level: int,
 ) -> None:
-    upsert_high_score(path, started_at, keystrokes, monsters_killed, level)
+    _ = upsert_high_score(path, started_at, keystrokes, monsters_killed, level)
 
 
 def record_high_score(
