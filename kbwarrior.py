@@ -8,6 +8,8 @@ Run:
 from __future__ import annotations
 
 import atexit
+import ctypes
+import ctypes.wintypes as wt
 import sys
 import threading
 import time
@@ -24,6 +26,152 @@ import kb_render
 import kb_scores
 import kb_sprites
 import kb_tray
+
+
+WM_QUERYENDSESSION = 0x0011
+WM_ENDSESSION = 0x0016
+WM_CLOSE = 0x0010
+LRESULT = ctypes.c_ssize_t
+
+
+class WindowsShutdownListener:
+    """Listens for Windows shutdown/restart and requests graceful app stop."""
+
+    def __init__(self, on_shutdown: callable):
+        self._on_shutdown = on_shutdown
+        self._thread: threading.Thread | None = None
+        self._running = threading.Event()
+        self._ready = threading.Event()
+        self._hwnd: int | None = None
+        self._class_name = f"KBWarriorShutdownListener_{id(self)}"
+        self._hinst = ctypes.windll.kernel32.GetModuleHandleW(None)
+        self._wndproc_ref = None
+        self._class_atom = 0
+
+    def start(self) -> None:
+        self._running.set()
+        self._thread = threading.Thread(target=self._message_loop, daemon=True)
+        self._thread.start()
+        self._ready.wait(timeout=2)
+
+    def stop(self) -> None:
+        self._running.clear()
+        if self._hwnd:
+            ctypes.windll.user32.PostMessageW(self._hwnd, WM_CLOSE, 0, 0)
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+
+    def _message_loop(self) -> None:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        WNDPROCTYPE = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+
+        user32.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+        user32.DefWindowProcW.restype = LRESULT
+        user32.RegisterClassW.argtypes = [ctypes.c_void_p]
+        user32.RegisterClassW.restype = wt.ATOM
+        user32.CreateWindowExW.argtypes = [
+            wt.DWORD,
+            wt.LPCWSTR,
+            wt.LPCWSTR,
+            wt.DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wt.HWND,
+            wt.HMENU,
+            wt.HINSTANCE,
+            wt.LPVOID,
+        ]
+        user32.CreateWindowExW.restype = wt.HWND
+        user32.GetMessageW.argtypes = [ctypes.c_void_p, wt.HWND, wt.UINT, wt.UINT]
+        user32.GetMessageW.restype = ctypes.c_int
+        user32.TranslateMessage.argtypes = [ctypes.c_void_p]
+        user32.TranslateMessage.restype = ctypes.c_bool
+        user32.DispatchMessageW.argtypes = [ctypes.c_void_p]
+        user32.DispatchMessageW.restype = LRESULT
+        user32.DestroyWindow.argtypes = [wt.HWND]
+        user32.DestroyWindow.restype = ctypes.c_bool
+        user32.UnregisterClassW.argtypes = [wt.LPCWSTR, wt.HINSTANCE]
+        user32.UnregisterClassW.restype = ctypes.c_bool
+        user32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+        user32.PostMessageW.restype = ctypes.c_bool
+
+        class WNDCLASSW(ctypes.Structure):
+            _fields_ = [
+                ("style", wt.UINT),
+                ("lpfnWndProc", WNDPROCTYPE),
+                ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wt.HINSTANCE),
+                ("hIcon", wt.HICON),
+                ("hCursor", wt.HCURSOR),
+                ("hbrBackground", wt.HBRUSH),
+                ("lpszMenuName", wt.LPCWSTR),
+                ("lpszClassName", wt.LPCWSTR),
+            ]
+
+        class MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wt.HWND),
+                ("message", wt.UINT),
+                ("wParam", wt.WPARAM),
+                ("lParam", wt.LPARAM),
+                ("time", wt.DWORD),
+                ("pt", wt.POINT),
+            ]
+
+        def wnd_proc(hwnd, msg, wparam, lparam):
+            if msg == WM_QUERYENDSESSION:
+                return 1
+            if msg == WM_ENDSESSION and wparam:
+                self._on_shutdown()
+                return 0
+            if msg == WM_CLOSE:
+                user32.DestroyWindow(hwnd)
+                return 0
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        self._wndproc_ref = WNDPROCTYPE(wnd_proc)
+        wnd_class = WNDCLASSW()
+        wnd_class.lpfnWndProc = self._wndproc_ref
+        wnd_class.hInstance = self._hinst
+        wnd_class.lpszClassName = self._class_name
+
+        self._class_atom = user32.RegisterClassW(ctypes.byref(wnd_class))
+        if not self._class_atom:
+            self._ready.set()
+            return
+
+        self._hwnd = user32.CreateWindowExW(
+            0,
+            self._class_name,
+            "KBWarriorShutdownWindow",
+            0,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            self._hinst,
+            None,
+        )
+        self._ready.set()
+        if not self._hwnd:
+            user32.UnregisterClassW(self._class_name, self._hinst)
+            return
+
+        msg = MSG()
+        while self._running.is_set() and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+        if self._hwnd:
+            user32.DestroyWindow(self._hwnd)
+            self._hwnd = None
+        if self._class_atom:
+            user32.UnregisterClassW(self._class_name, self._hinst)
 
 
 def format_tray_tooltip(
@@ -129,7 +277,11 @@ def main() -> int:
     if gamesense_base_url is None:
         gamesense_next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
 
-    stop_event = threading.Event()    
+    stop_event = threading.Event()
+    shutdown_listener = None
+    if sys.platform == "win32":
+        shutdown_listener = WindowsShutdownListener(stop_event.set)
+        shutdown_listener.start()
 
     best_score = kb_scores.get_best_score(cfg.HIGH_SCORES_PATH)
     if gamesense_base_url is not None and best_score is not None:
@@ -509,6 +661,9 @@ def main() -> int:
         pass
     finally:
         stop_event.set()
+
+        if shutdown_listener is not None:
+            shutdown_listener.stop()
 
         keyboard_listener.stop()
         mouse_listener.stop()
