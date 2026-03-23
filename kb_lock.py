@@ -1,24 +1,8 @@
 from __future__ import annotations
-
 import os
 import tempfile
 from pathlib import Path
-
 from kb_config import INSTANCE_LOCK_FILENAME
-
-
-def _close_fd_safely(lock_fd: int) -> None:
-    try:
-        os.close(lock_fd)
-    except OSError:
-        pass
-
-
-def _unlink_safely(lock_path: Path) -> None:
-    try:
-        lock_path.unlink()
-    except OSError:
-        pass
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -26,9 +10,9 @@ def _pid_is_running(pid: int) -> bool:
         return False
     try:
         os.kill(pid, 0)
+        return True
     except OSError:
         return False
-    return True
 
 
 def acquire_instance_lock() -> tuple[int, Path] | None:
@@ -40,15 +24,15 @@ def acquire_instance_lock() -> tuple[int, Path] | None:
             lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
         except FileExistsError:
             try:
-                existing_pid_text = lock_path.read_text(encoding="utf-8").strip()
-                existing_pid = int(existing_pid_text)
+                existing_pid = int(lock_path.read_text(encoding="utf-8").strip())
             except (OSError, ValueError):
                 existing_pid = -1
-
             if _pid_is_running(existing_pid):
                 return None
-
-            _unlink_safely(lock_path)
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
             continue
         except OSError:
             return None
@@ -57,8 +41,10 @@ def acquire_instance_lock() -> tuple[int, Path] | None:
             os.write(lock_fd, str(current_pid).encode("utf-8"))
             os.fsync(lock_fd)
         except OSError:
-            _close_fd_safely(lock_fd)
-            _unlink_safely(lock_path)
+            try: os.close(lock_fd)
+            except OSError: pass
+            try: lock_path.unlink()
+            except OSError: pass
             return None
 
         return lock_fd, lock_path
@@ -67,5 +53,7 @@ def acquire_instance_lock() -> tuple[int, Path] | None:
 
 
 def release_instance_lock(lock_fd: int, lock_path: Path) -> None:
-    _close_fd_safely(lock_fd)
-    _unlink_safely(lock_path)
+    try: os.close(lock_fd)
+    except OSError: pass
+    try: lock_path.unlink()
+    except OSError: pass

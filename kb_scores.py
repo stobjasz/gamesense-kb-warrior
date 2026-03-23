@@ -1,55 +1,39 @@
 from __future__ import annotations
-
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import List
 
 
-def _normalize_score_entry(item: dict) -> dict | None:
+def _normalize(item: dict) -> dict | None:
     try:
-        keystrokes = max(0, int(item.get("keystrokes", 0)))
-        monsters_killed = max(0, int(item.get("monsters_killed", 0)))
-        level = max(1, int(item.get("level", 1)))
+        return {
+            "started_at": str(item.get("started_at", "")),
+            "ended_at": str(item.get("ended_at", "")),
+            "keystrokes": max(0, int(item.get("keystrokes", 0))),
+            "monsters_killed": max(0, int(item.get("monsters_killed", 0))),
+            "level": max(1, int(item.get("level", 1))),
+        }
     except (TypeError, ValueError):
         return None
 
-    return {
-        "started_at": str(item.get("started_at", "")),
-        "ended_at": str(item.get("ended_at", "")),
-        "keystrokes": keystrokes,
-        "monsters_killed": monsters_killed,
-        "level": level,
-    }
 
-
-def _score_sort_key(score: dict) -> tuple[int, str]:
+def _sort_key(score: dict) -> tuple[int, str]:
     return score["keystrokes"], score["ended_at"]
 
 
 def load_high_scores(path: Path) -> List[dict]:
     if not path.is_file():
         return []
-
     try:
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError, ValueError):
         return []
-
     if not isinstance(data, list):
         return []
-
-    scores: List[dict] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-
-        normalized = _normalize_score_entry(item)
-        if normalized is not None:
-            scores.append(normalized)
-
-    scores.sort(key=_score_sort_key, reverse=True)
+    scores = [n for item in data if isinstance(item, dict) and (n := _normalize(item))]
+    scores.sort(key=_sort_key, reverse=True)
     return scores
 
 
@@ -60,42 +44,29 @@ def save_high_scores(path: Path, scores: List[dict]) -> None:
 
 def get_best_score(path: Path) -> dict | None:
     scores = load_high_scores(path)
-    if not scores:
-        return None
-    return scores[0]
+    return scores[0] if scores else None
 
 
-def upsert_high_score(
-    path: Path,
-    started_at: str,
-    keystrokes: int,
-    monsters_killed: int,
-    level: int,
-) -> int | None:
+def upsert_high_score(path: Path, started_at: str, keystrokes: int, monsters_killed: int, level: int) -> int | None:
     scores = load_high_scores(path)
-    entry = _normalize_score_entry(
-        {
-            "started_at": started_at,
-            "ended_at": datetime.now().isoformat(timespec="seconds"),
-            "keystrokes": keystrokes,
-            "monsters_killed": monsters_killed,
-            "level": level,
-        }
-    )
+    entry = _normalize({
+        "started_at": started_at,
+        "ended_at": datetime.now().isoformat(timespec="seconds"),
+        "keystrokes": keystrokes,
+        "monsters_killed": monsters_killed,
+        "level": level,
+    })
     if entry is None:
         return None
 
-    replaced_existing = False
     for idx, score in enumerate(scores):
         if score.get("started_at") == started_at:
             scores[idx] = entry
-            replaced_existing = True
             break
-
-    if not replaced_existing:
+    else:
         scores.append(entry)
 
-    scores.sort(key=_score_sort_key, reverse=True)
+    scores.sort(key=_sort_key, reverse=True)
     top_scores = scores[:10]
     save_high_scores(path, top_scores)
 
@@ -105,21 +76,6 @@ def upsert_high_score(
     return None
 
 
-def update_current_stats(
-    path: Path,
-    started_at: str,
-    keystrokes: int,
-    monsters_killed: int,
-    level: int,
-) -> None:
-    _ = upsert_high_score(path, started_at, keystrokes, monsters_killed, level)
-
-
-def record_high_score(
-    path: Path,
-    started_at: str,
-    keystrokes: int,
-    monsters_killed: int,
-    level: int,
-) -> int | None:
-    return upsert_high_score(path, started_at, keystrokes, monsters_killed, level)
+# Aliases kept for call-site compatibility
+update_current_stats = upsert_high_score
+record_high_score = upsert_high_score
