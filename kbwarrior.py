@@ -192,6 +192,30 @@ class DropState:
     spawned_at: float
 
 
+@dataclass
+class TransitionPixel:
+    x: float
+    y: int
+    target_x: float
+    speed: float
+
+
+@dataclass
+class SceneTransitionState:
+    phase: str  # "out" or "in"
+    target_scene_index: int
+    target_scene_cfg: kb_sprites.CorridorSceneConfig
+    target_static_sprites: dict
+    target_animated_sprites: dict
+    target_wall_bricks: list
+    target_floor_tile: list
+    old_pixels: List[TransitionPixel]
+    new_pixels: List[TransitionPixel]
+    warrior_x: float
+    run_frame_index: int = 0
+    run_tick_accumulator: float = 0.0
+
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 
 def format_tray_tooltip(warrior_level: int, monsters_killed: int, keycount: int,
@@ -249,6 +273,67 @@ def spawn_monster(character_frames, level: int, warrior_x: int) -> tuple:
     return frames, target_x, max_hp
 
 
+def render_scene_background_canvas(
+    scene_cfg: kb_sprites.CorridorSceneConfig,
+    static_sprites: dict,
+    animated_sprites: dict,
+    wall_bricks: list,
+    floor_tile: list,
+    scroll_x: float,
+    anim_tick: int,
+) -> List[List[int]]:
+    canvas = [[0] * cfg.WIDTH for _ in range(cfg.HEIGHT)]
+    if scene_cfg.scene_mode == "sky_horizon":
+        sky = scene_cfg.sky_horizon
+        if sky is None:
+            return canvas
+        sky_tile = static_sprites.get(sky.sky_sprite_id)
+        if sky_tile is None:
+            return canvas
+        kb_render.draw_scrolling_sky_horizon_background(
+            canvas,
+            sky_tile,
+            int(scroll_x),
+            sky.sky_scroll_divisor,
+            sky.horizon_base_y,
+            sky.horizon_offsets,
+            sky.horizon_scroll_divisor,
+        )
+        return canvas
+
+    kb_render.draw_scrolling_corridor_background(
+        canvas,
+        wall_bricks,
+        floor_tile,
+        static_sprites,
+        animated_sprites,
+        scene_cfg.placements,
+        int(scroll_x),
+        anim_tick,
+        scene_cfg.floor_height,
+        scene_cfg.brick_start_offset_x,
+        scene_cfg.brick_start_offset_y,
+    )
+    return canvas
+
+
+def build_pixel_swarm(canvas: List[List[int]], direction: str) -> List[TransitionPixel]:
+    pixels: List[TransitionPixel] = []
+    for y in range(cfg.HEIGHT):
+        for x in range(cfg.WIDTH):
+            if not canvas[y][x]:
+                continue
+            if direction == "out_right":
+                target_x = float(cfg.WIDTH + random.randint(8, 80))
+                speed = float(random.randint(14, 50))
+                pixels.append(TransitionPixel(x=float(x), y=y, target_x=target_x, speed=speed))
+            else:
+                start_x = float(x - cfg.WIDTH - random.randint(8, cfg.WIDTH + 20))
+                speed = float(random.randint(85, 240))
+                pixels.append(TransitionPixel(x=start_x, y=y, target_x=float(x), speed=speed))
+    return pixels
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -260,8 +345,7 @@ def main() -> int:
     atexit.register(kb_lock.release_instance_lock, lock_fd, lock_path)
 
     scene_paths = [cfg.NIGHT01_SCENE_CONFIG_PATH, cfg.CORRIDOR_SCENE_CONFIG_PATH]
-    scene_path_to_index = {path: idx for idx, path in enumerate(scene_paths)}
-    active_scene_index = scene_path_to_index.get(cfg.SCENE_CONFIG_PATH, 0)
+    active_scene_index = random.randrange(len(scene_paths))
 
     def load_scene_for_path(scene_path):
         scene_cfg = kb_sprites.load_corridor_scene_config(scene_path)
@@ -367,6 +451,9 @@ def main() -> int:
     keyboard_listener, mouse_listener = kb_input.start_ctrl_d_listener(stop_event, input_stats)
     tray_icon = kb_tray.start_tray_icon(stop_event)
     last_scene_toggle_count = input_stats.get_scene_toggle_count()
+    pending_scene_steps = 0
+    scene_transition: SceneTransitionState | None = None
+    next_auto_scene_switch_at = time.monotonic() + cfg.SCENE_AUTO_SWITCH_SECONDS
 
     last_seen_space   = 0
     last_seen_other   = 0
@@ -390,6 +477,156 @@ def main() -> int:
 
             delta = max(0.0, min(loop_start - last_loop_time, 0.25))
             last_loop_time = loop_start
+            keys, spaces, others, current_input_time = input_stats.snapshot()
+
+            current_scene_toggle_count = input_stats.get_scene_toggle_count()
+            if current_scene_toggle_count != last_scene_toggle_count:
+                toggle_steps = max(0, current_scene_toggle_count - last_scene_toggle_count)
+                last_scene_toggle_count = current_scene_toggle_count
+                if toggle_steps > 0:
+                    pending_scene_steps += toggle_steps
+                    next_auto_scene_switch_at = time.monotonic() + cfg.SCENE_AUTO_SWITCH_SECONDS
+
+            if time.monotonic() >= next_auto_scene_switch_at:
+                pending_scene_steps += 1
+                next_auto_scene_switch_at = time.monotonic() + cfg.SCENE_AUTO_SWITCH_SECONDS
+
+            if scene_transition is None and pending_scene_steps > 0:
+                next_scene_index = (active_scene_index + pending_scene_steps) % len(scene_paths)
+                pending_scene_steps = 0
+                try:
+                    (
+                        target_scene_cfg,
+                        target_static_sprites,
+                        target_animated_sprites,
+                        target_wall_bricks,
+                        target_floor_tile,
+                    ) = load_scene_for_path(scene_paths[next_scene_index])
+
+                    old_canvas = render_scene_background_canvas(
+                        corridor_scene,
+                        scene_static_sprites,
+                        scene_animated_sprites,
+                        background_wall_brick_tiles,
+                        background_floor_tile,
+                        background_scroll_x,
+                        background_anim_tick,
+                    )
+                    new_canvas = render_scene_background_canvas(
+                        target_scene_cfg,
+                        target_static_sprites,
+                        target_animated_sprites,
+                        target_wall_bricks,
+                        target_floor_tile,
+                        background_scroll_x,
+                        background_anim_tick,
+                    )
+
+                    scene_transition = SceneTransitionState(
+                        phase="out",
+                        target_scene_index=next_scene_index,
+                        target_scene_cfg=target_scene_cfg,
+                        target_static_sprites=target_static_sprites,
+                        target_animated_sprites=target_animated_sprites,
+                        target_wall_bricks=target_wall_bricks,
+                        target_floor_tile=target_floor_tile,
+                        old_pixels=build_pixel_swarm(old_canvas, "out_right"),
+                        new_pixels=build_pixel_swarm(new_canvas, "in_from_left"),
+                        warrior_x=float(warrior_x),
+                    )
+                    deathfx_active = False
+                    active_drop = None
+                except (OSError, ValueError) as exc:
+                    print(f"Warning: scene switch failed: {exc}", file=sys.stderr)
+
+            if scene_transition is not None:
+                st = scene_transition
+                st.run_tick_accumulator, adv = kb_progression.advance_frame_timer(
+                    st.run_tick_accumulator,
+                    delta,
+                    warrior_controller.timing.run_seconds_per_frame,
+                )
+                if adv > 0:
+                    st.run_frame_index = (st.run_frame_index + adv) % len(warrior_animations["run"])
+                warrior_tile = warrior_animations["run"][st.run_frame_index]
+
+                center_x = float((cfg.WIDTH - cfg.TILE_SIZE) // 2)
+                run_speed = cfg.WARRIOR_SHIFT_SPEED_PX_PER_SECOND * 2.5
+
+                for px in st.old_pixels:
+                    px.x += px.speed * delta
+
+                if st.phase == "out":
+                    st.warrior_x = min(center_x, st.warrior_x + run_speed * delta)
+                    left_cleared = not any(0 <= px.x < (cfg.WIDTH * 0.2) for px in st.old_pixels)
+                    if left_cleared and st.warrior_x >= center_x - 0.5:
+                        st.phase = "in"
+                else:
+                    st.warrior_x = max(float(cfg.LEFT_SPRITE_X), st.warrior_x - run_speed * delta)
+                    for px in st.new_pixels:
+                        px.x = min(px.target_x, px.x + px.speed * delta)
+
+                    all_new_in_place = all(px.x >= px.target_x - 0.01 for px in st.new_pixels)
+                    warrior_back = st.warrior_x <= (cfg.LEFT_SPRITE_X + 0.5)
+                    if all_new_in_place and warrior_back:
+                        corridor_scene = st.target_scene_cfg
+                        scene_static_sprites = st.target_static_sprites
+                        scene_animated_sprites = st.target_animated_sprites
+                        background_wall_brick_tiles = st.target_wall_bricks
+                        background_floor_tile = st.target_floor_tile
+                        active_scene_index = st.target_scene_index
+
+                        warrior_x = float(cfg.LEFT_SPRITE_X)
+                        warrior_target_x = pick_warrior_spawn_target_x(warrior_x)
+                        mon_frames, mon_target_x, mon_max_hp = spawn_monster(
+                            character_frames,
+                            session.warrior_level,
+                            int(round(warrior_target_x)),
+                        )
+                        monster = MonsterState(
+                            frames=mon_frames,
+                            target_x=mon_target_x,
+                            max_hp=mon_max_hp,
+                            hp=mon_max_hp,
+                            level=session.warrior_level,
+                            x=float(cfg.RIGHT_SPRITE_START_X),
+                        )
+                        scene_transition = None
+
+                transition_canvas = [[0] * cfg.WIDTH for _ in range(cfg.HEIGHT)]
+                for px in st.old_pixels:
+                    sx = int(round(px.x))
+                    if 0 <= sx < cfg.WIDTH and 0 <= px.y < cfg.HEIGHT:
+                        transition_canvas[px.y][sx] = 1
+                if st.phase == "in":
+                    for px in st.new_pixels:
+                        sx = int(round(px.x))
+                        if 0 <= sx < cfg.WIDTH and 0 <= px.y < cfg.HEIGHT:
+                            transition_canvas[px.y][sx] = 1
+
+                kb_render.draw_tile_on_canvas(
+                    transition_canvas,
+                    warrior_tile,
+                    int(round(st.warrior_x)),
+                    cfg.HEIGHT - cfg.TILE_SIZE,
+                )
+
+                frame = kb_render.canvas_to_image_data(transition_canvas)
+                background_anim_tick += 1
+                send_frame_with_retry(gs, frame)
+                kb_tray.update_tray_tooltip(tray_icon, format_tray_tooltip(
+                    session.warrior_level, session.monsters_killed, keys, gs.last_error, gs.next_retry_at,
+                ))
+
+                last_seen_space = spaces
+                last_seen_other = others
+                was_sliding = False
+
+                remaining = update_interval - (time.monotonic() - loop_start)
+                if remaining > 0:
+                    time.sleep(remaining)
+                continue
+
             is_sliding = monster.x > monster.target_x
 
             # Advance monster sprite frame
@@ -405,26 +642,6 @@ def main() -> int:
                     warrior_x = max(warrior_target_x, warrior_x - cfg.WARRIOR_SHIFT_SPEED_PX_PER_SECOND * delta)
 
             warrior_controller.on_slide_state(was_sliding, is_sliding)
-
-            keys, spaces, others, current_input_time = input_stats.snapshot()
-
-            current_scene_toggle_count = input_stats.get_scene_toggle_count()
-            if current_scene_toggle_count != last_scene_toggle_count:
-                toggle_steps = max(0, current_scene_toggle_count - last_scene_toggle_count)
-                last_scene_toggle_count = current_scene_toggle_count
-                if toggle_steps > 0:
-                    next_scene_index = (active_scene_index + toggle_steps) % len(scene_paths)
-                    try:
-                        (
-                            corridor_scene,
-                            scene_static_sprites,
-                            scene_animated_sprites,
-                            background_wall_brick_tiles,
-                            background_floor_tile,
-                        ) = load_scene_for_path(scene_paths[next_scene_index])
-                        active_scene_index = next_scene_index
-                    except (OSError, ValueError) as exc:
-                        print(f"Warning: scene switch failed: {exc}", file=sys.stderr)
 
             maybe_save_stats(session, loop_start, keys)
 
