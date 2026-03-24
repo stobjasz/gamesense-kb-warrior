@@ -1,0 +1,23 @@
+{
+  "sprites": [
+    {
+      "id": "sky_main",
+      "kind": "static",
+      "image": "../sky.png",
+      "size": [160, 32]
+    }
+  ],
+  "composition": {
+    "mode": "sky_horizon",
+    "sky": {
+      "sprite_id": "sky_main",
+      "scroll_divisor": 1
+    },
+    "horizon": {
+      "base_y": 25,
+      "scroll_divisor": 3,
+      "offsets": [0, 0, -1, -1, -2, -1, 0, 1, 1, 0, -1, -2, -1, 0, 1, 2, 1, 0]
+    },
+    "placements": []
+  }
+}

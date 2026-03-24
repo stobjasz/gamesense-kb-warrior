@@ -14,6 +14,7 @@ class InputStats:
     key_count: int = 0
     space_count: int = 0
     other_count: int = 0
+    scene_toggle_count: int = 0
     last_input_time: float = field(default_factory=time.monotonic)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -33,6 +34,14 @@ class InputStats:
     def snapshot(self) -> tuple[int, int, int, float]:
         with self.lock:
             return self.key_count, self.space_count, self.other_count, self.last_input_time
+
+    def record_scene_toggle(self) -> None:
+        with self.lock:
+            self.scene_toggle_count += 1
+
+    def get_scene_toggle_count(self) -> int:
+        with self.lock:
+            return self.scene_toggle_count
 
 
 def start_ctrl_d_listener(stop_event: threading.Event, input_stats: InputStats):
@@ -54,6 +63,8 @@ def start_ctrl_d_listener(stop_event: threading.Event, input_stats: InputStats):
         if key == keyboard.Key.backspace and ctrl_pressed and alt_pressed:
             stop_event.set()
             return False
+        if key == keyboard.Key.page_up and ctrl_pressed and alt_pressed and key not in pressed_keys:
+            input_stats.record_scene_toggle()
         if key not in pressed_keys:
             input_stats.mark_input_started()
             pressed_keys.add(key)

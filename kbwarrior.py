@@ -259,21 +259,31 @@ def main() -> int:
     lock_fd, lock_path = instance_lock
     atexit.register(kb_lock.release_instance_lock, lock_fd, lock_path)
 
+    scene_paths = [cfg.NIGHT01_SCENE_CONFIG_PATH, cfg.CORRIDOR_SCENE_CONFIG_PATH]
+    scene_path_to_index = {path: idx for idx, path in enumerate(scene_paths)}
+    active_scene_index = scene_path_to_index.get(cfg.SCENE_CONFIG_PATH, 0)
+
+    def load_scene_for_path(scene_path):
+        scene_cfg = kb_sprites.load_corridor_scene_config(scene_path)
+        static_sprites, animated_sprites = kb_sprites.load_corridor_scene_assets(scene_cfg)
+
+        wall_brick_tiles: List[List[List[int]]] = []
+        floor_tile: List[List[int]] = [[0]]
+        if scene_cfg.scene_mode == "brick_floor":
+            wall_brick_tiles = [static_sprites[sprite_id] for sprite_id in scene_cfg.wall_brick_sprite_ids]
+            if not wall_brick_tiles:
+                raise ValueError("Brick-floor scene must define at least one wall brick sprite")
+
+            floor_tile = static_sprites.get(scene_cfg.floor_sprite_id)
+            if floor_tile is None:
+                raise ValueError(f"Scene floor sprite '{scene_cfg.floor_sprite_id}' must be a static sprite")
+
+        return scene_cfg, static_sprites, animated_sprites, wall_brick_tiles, floor_tile
+
     try:
-        corridor_scene = kb_sprites.load_corridor_scene_config(cfg.CORRIDOR_SCENE_CONFIG_PATH)
-        scene_static_sprites, scene_animated_sprites = kb_sprites.load_corridor_scene_assets(corridor_scene)
-
-        background_wall_brick_tiles = [
-            scene_static_sprites[sprite_id] for sprite_id in corridor_scene.wall_brick_sprite_ids
-        ]
-        if not background_wall_brick_tiles:
-            raise ValueError("Corridor scene must define at least one wall brick sprite")
-
-        background_floor_tile = scene_static_sprites.get(corridor_scene.floor_sprite_id)
-        if background_floor_tile is None:
-            raise ValueError(
-                f"Corridor floor sprite '{corridor_scene.floor_sprite_id}' must be a static sprite"
-            )
+        corridor_scene, scene_static_sprites, scene_animated_sprites, background_wall_brick_tiles, background_floor_tile = load_scene_for_path(
+            scene_paths[active_scene_index]
+        )
 
         character_frames = kb_sprites.load_character_frames(cfg.SPRITESHEET_PATH)
         warrior_animations = kb_sprites.load_warrior_animations()
@@ -356,6 +366,7 @@ def main() -> int:
     input_stats = kb_input.InputStats()
     keyboard_listener, mouse_listener = kb_input.start_ctrl_d_listener(stop_event, input_stats)
     tray_icon = kb_tray.start_tray_icon(stop_event)
+    last_scene_toggle_count = input_stats.get_scene_toggle_count()
 
     last_seen_space   = 0
     last_seen_other   = 0
@@ -396,6 +407,24 @@ def main() -> int:
             warrior_controller.on_slide_state(was_sliding, is_sliding)
 
             keys, spaces, others, current_input_time = input_stats.snapshot()
+
+            current_scene_toggle_count = input_stats.get_scene_toggle_count()
+            if current_scene_toggle_count != last_scene_toggle_count:
+                toggle_steps = max(0, current_scene_toggle_count - last_scene_toggle_count)
+                last_scene_toggle_count = current_scene_toggle_count
+                if toggle_steps > 0:
+                    next_scene_index = (active_scene_index + toggle_steps) % len(scene_paths)
+                    try:
+                        (
+                            corridor_scene,
+                            scene_static_sprites,
+                            scene_animated_sprites,
+                            background_wall_brick_tiles,
+                            background_floor_tile,
+                        ) = load_scene_for_path(scene_paths[next_scene_index])
+                        active_scene_index = next_scene_index
+                    except (OSError, ValueError) as exc:
+                        print(f"Warning: scene switch failed: {exc}", file=sys.stderr)
 
             maybe_save_stats(session, loop_start, keys)
 
@@ -513,11 +542,13 @@ def main() -> int:
                 drop_y = int(active_drop.y)
 
             frame = kb_render.compose_frame(kb_render.RenderState(
+                scene_mode=corridor_scene.scene_mode,
                 background_wall_brick_tiles=background_wall_brick_tiles,
                 background_floor_tile=background_floor_tile,
                 scene_static_sprites=scene_static_sprites,
                 scene_animated_sprites=scene_animated_sprites,
                 scene_placements=corridor_scene.placements,
+                scene_sky_horizon=corridor_scene.sky_horizon,
                 background_scroll_x=background_scroll_x,
                 background_anim_tick=background_anim_tick,
                 corridor_floor_height=corridor_scene.floor_height,

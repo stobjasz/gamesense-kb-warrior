@@ -2,16 +2,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 from kb_config import BACKGROUND_TILE_SIZE, FONT_5X7, HEALTH_BAR_WIDTH, HEALTH_BAR_Y, HEIGHT, LEFT_SPRITE_X, SLASHFX_X_OFFSET, TILE_SIZE, WIDTH
-from kb_sprites import ScenePlacementRule
+from kb_sprites import ScenePlacementRule, SceneSkyHorizonConfig
 
 
 @dataclass(frozen=True)
 class RenderState:
+    scene_mode: str
     background_wall_brick_tiles: List[List[List[int]]]
     background_floor_tile: List[List[int]]
     scene_static_sprites: Dict[str, List[List[int]]]
     scene_animated_sprites: Dict[str, List[List[List[int]]]]
     scene_placements: List[ScenePlacementRule]
+    scene_sky_horizon: SceneSkyHorizonConfig | None
     background_scroll_x: float
     background_anim_tick: int
     corridor_floor_height: int
@@ -98,6 +100,36 @@ def draw_tile_on_canvas(canvas: List[List[int]], tile: List[List[int]], x_offset
 
 def draw_scrolling_background(canvas: List[List[int]], tile: List[List[int]], scroll_x: int) -> None:
     raise NotImplementedError("use draw_scrolling_corridor_background")
+
+
+def draw_scrolling_sky_horizon_background(
+    canvas: List[List[int]],
+    sky_tile: List[List[int]],
+    scroll_x: int,
+    sky_scroll_divisor: int,
+    horizon_base_y: int,
+    horizon_offsets: List[int],
+    horizon_scroll_divisor: int,
+) -> None:
+    tile_w, tile_h = len(sky_tile[0]), len(sky_tile)
+    sky_div = max(1, sky_scroll_divisor)
+    horizon_div = max(1, horizon_scroll_divisor)
+    offset_x = (scroll_x // sky_div) % tile_w
+    horizon_scroll_x = (scroll_x // horizon_div)
+
+    if not horizon_offsets:
+        horizon_offsets = [0]
+
+    for x in range(WIDTH):
+        horizon_idx = (x + horizon_scroll_x) % len(horizon_offsets)
+        horizon_y = max(0, min(HEIGHT - 1, horizon_base_y + horizon_offsets[horizon_idx]))
+
+        for y in range(0, horizon_y):
+            ty = y % tile_h
+            if sky_tile[ty][(x + offset_x) % tile_w]:
+                canvas[y][x] = 1
+
+        canvas[horizon_y][x] = 1
 
 
 def _hash2(a: int, b: int) -> int:
@@ -335,19 +367,36 @@ def _extract_best_score_stats(best_score: dict | None) -> tuple[int, int, int]:
 
 def compose_frame(state: RenderState) -> List[int]:
     canvas = [[0] * WIDTH for _ in range(HEIGHT)]
-    draw_scrolling_corridor_background(
-        canvas,
-        state.background_wall_brick_tiles,
-        state.background_floor_tile,
-        state.scene_static_sprites,
-        state.scene_animated_sprites,
-        state.scene_placements,
-        state.background_scroll_x,
-        state.background_anim_tick,
-        state.corridor_floor_height,
-        state.corridor_brick_start_offset_x,
-        state.corridor_brick_start_offset_y,
-    )
+    if state.scene_mode == "sky_horizon":
+        sky = state.scene_sky_horizon
+        if sky is None:
+            raise ValueError("RenderState.scene_sky_horizon is required for sky_horizon mode")
+        sky_tile = state.scene_static_sprites.get(sky.sky_sprite_id)
+        if sky_tile is None:
+            raise ValueError(f"Sky sprite '{sky.sky_sprite_id}' not loaded")
+        draw_scrolling_sky_horizon_background(
+            canvas,
+            sky_tile,
+            int(state.background_scroll_x),
+            sky.sky_scroll_divisor,
+            sky.horizon_base_y,
+            sky.horizon_offsets,
+            sky.horizon_scroll_divisor,
+        )
+    else:
+        draw_scrolling_corridor_background(
+            canvas,
+            state.background_wall_brick_tiles,
+            state.background_floor_tile,
+            state.scene_static_sprites,
+            state.scene_animated_sprites,
+            state.scene_placements,
+            state.background_scroll_x,
+            state.background_anim_tick,
+            state.corridor_floor_height,
+            state.corridor_brick_start_offset_x,
+            state.corridor_brick_start_offset_y,
+        )
     draw_tile_on_canvas(canvas, state.right_sprite_tile, state.right_sprite_x, HEIGHT - TILE_SIZE)
     draw_tile_on_canvas(canvas, state.left_sprite_tile, state.left_sprite_x, HEIGHT - TILE_SIZE)
 

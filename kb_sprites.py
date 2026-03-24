@@ -37,14 +37,25 @@ class ScenePlacementRule:
 
 
 @dataclass(frozen=True)
+class SceneSkyHorizonConfig:
+    sky_sprite_id: str
+    sky_scroll_divisor: int
+    horizon_base_y: int
+    horizon_scroll_divisor: int
+    horizon_offsets: List[int]
+
+
+@dataclass(frozen=True)
 class CorridorSceneConfig:
     sprites: Dict[str, SceneSpriteConfig]
+    scene_mode: str
     wall_brick_sprite_ids: List[str]
     floor_sprite_id: str
     floor_height: int
     brick_start_offset_x: int
     brick_start_offset_y: int
     placements: List[ScenePlacementRule]
+    sky_horizon: SceneSkyHorizonConfig | None
 
 
 def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
@@ -112,31 +123,81 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
     if not isinstance(composition, dict):
         raise ValueError("Corridor scene config 'composition' must be an object")
 
-    def _read_non_negative_int(name: str) -> int:
-        value = composition.get(name)
-        if not isinstance(value, int) or value < 0:
-            raise ValueError(f"Corridor scene config 'composition.{name}' must be a non-negative integer")
-        return value
+    scene_mode = composition.get("mode", "brick_floor")
+    if scene_mode not in {"brick_floor", "sky_horizon"}:
+        raise ValueError("Corridor scene config 'composition.mode' must be 'brick_floor' or 'sky_horizon'")
 
-    wall_raw = composition.get("wall")
-    if not isinstance(wall_raw, dict):
-        raise ValueError("Corridor scene config 'composition.wall' must be an object")
-    wall_brick_sprite_ids = wall_raw.get("brick_sprite_ids")
-    if not isinstance(wall_brick_sprite_ids, list) or not wall_brick_sprite_ids:
-        raise ValueError("Corridor scene config 'composition.wall.brick_sprite_ids' must be a non-empty array")
-    for i, sprite_id in enumerate(wall_brick_sprite_ids):
-        if not isinstance(sprite_id, str) or sprite_id not in sprites:
-            raise ValueError(f"Corridor scene config 'composition.wall.brick_sprite_ids[{i}]' must reference an existing sprite id")
+    wall_brick_sprite_ids: List[str] = []
+    floor_sprite_id = ""
+    floor_height = 0
+    brick_start_offset_x = 0
+    brick_start_offset_y = 0
+    sky_horizon: SceneSkyHorizonConfig | None = None
 
-    floor_raw = composition.get("floor")
-    if not isinstance(floor_raw, dict):
-        raise ValueError("Corridor scene config 'composition.floor' must be an object")
-    floor_sprite_id = floor_raw.get("sprite_id")
-    if not isinstance(floor_sprite_id, str) or floor_sprite_id not in sprites:
-        raise ValueError("Corridor scene config 'composition.floor.sprite_id' must reference an existing sprite id")
-    floor_height = floor_raw.get("height")
-    if not isinstance(floor_height, int) or floor_height < 0:
-        raise ValueError("Corridor scene config 'composition.floor.height' must be a non-negative integer")
+    if scene_mode == "brick_floor":
+        def _read_non_negative_int(name: str) -> int:
+            value = composition.get(name)
+            if not isinstance(value, int) or value < 0:
+                raise ValueError(f"Corridor scene config 'composition.{name}' must be a non-negative integer")
+            return value
+
+        wall_raw = composition.get("wall")
+        if not isinstance(wall_raw, dict):
+            raise ValueError("Corridor scene config 'composition.wall' must be an object")
+        wall_brick_sprite_ids = wall_raw.get("brick_sprite_ids")
+        if not isinstance(wall_brick_sprite_ids, list) or not wall_brick_sprite_ids:
+            raise ValueError("Corridor scene config 'composition.wall.brick_sprite_ids' must be a non-empty array")
+        for i, sprite_id in enumerate(wall_brick_sprite_ids):
+            if not isinstance(sprite_id, str) or sprite_id not in sprites:
+                raise ValueError(f"Corridor scene config 'composition.wall.brick_sprite_ids[{i}]' must reference an existing sprite id")
+
+        floor_raw = composition.get("floor")
+        if not isinstance(floor_raw, dict):
+            raise ValueError("Corridor scene config 'composition.floor' must be an object")
+        floor_sprite_id = floor_raw.get("sprite_id")
+        if not isinstance(floor_sprite_id, str) or floor_sprite_id not in sprites:
+            raise ValueError("Corridor scene config 'composition.floor.sprite_id' must reference an existing sprite id")
+        floor_height = floor_raw.get("height")
+        if not isinstance(floor_height, int) or floor_height < 0:
+            raise ValueError("Corridor scene config 'composition.floor.height' must be a non-negative integer")
+
+        brick_start_offset_x = _read_non_negative_int("brick_start_offset_x")
+        brick_start_offset_y = _read_non_negative_int("brick_start_offset_y")
+    else:
+        sky_raw = composition.get("sky")
+        if not isinstance(sky_raw, dict):
+            raise ValueError("Corridor scene config 'composition.sky' must be an object for sky_horizon mode")
+        sky_sprite_id = sky_raw.get("sprite_id")
+        if not isinstance(sky_sprite_id, str) or sky_sprite_id not in sprites:
+            raise ValueError("Corridor scene config 'composition.sky.sprite_id' must reference an existing sprite id")
+        sky_scroll_divisor = sky_raw.get("scroll_divisor", 1)
+        if not isinstance(sky_scroll_divisor, int) or sky_scroll_divisor <= 0:
+            raise ValueError("Corridor scene config 'composition.sky.scroll_divisor' must be > 0")
+
+        horizon_raw = composition.get("horizon")
+        if not isinstance(horizon_raw, dict):
+            raise ValueError("Corridor scene config 'composition.horizon' must be an object for sky_horizon mode")
+        horizon_base_y = horizon_raw.get("base_y")
+        if not isinstance(horizon_base_y, int):
+            raise ValueError("Corridor scene config 'composition.horizon.base_y' must be an integer")
+        horizon_scroll_divisor = horizon_raw.get("scroll_divisor", 3)
+        if not isinstance(horizon_scroll_divisor, int) or horizon_scroll_divisor <= 0:
+            raise ValueError("Corridor scene config 'composition.horizon.scroll_divisor' must be > 0")
+        horizon_offsets = horizon_raw.get("offsets")
+        if (
+            not isinstance(horizon_offsets, list)
+            or not horizon_offsets
+            or not all(isinstance(v, int) for v in horizon_offsets)
+        ):
+            raise ValueError("Corridor scene config 'composition.horizon.offsets' must be a non-empty integer array")
+
+        sky_horizon = SceneSkyHorizonConfig(
+            sky_sprite_id=sky_sprite_id,
+            sky_scroll_divisor=sky_scroll_divisor,
+            horizon_base_y=horizon_base_y,
+            horizon_scroll_divisor=horizon_scroll_divisor,
+            horizon_offsets=horizon_offsets,
+        )
 
     placements_raw = composition.get("placements", [])
     if not isinstance(placements_raw, list):
@@ -201,12 +262,14 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
 
     return CorridorSceneConfig(
         sprites=sprites,
+        scene_mode=scene_mode,
         wall_brick_sprite_ids=wall_brick_sprite_ids,
         floor_sprite_id=floor_sprite_id,
         floor_height=floor_height,
-        brick_start_offset_x=_read_non_negative_int("brick_start_offset_x"),
-        brick_start_offset_y=_read_non_negative_int("brick_start_offset_y"),
+        brick_start_offset_x=brick_start_offset_x,
+        brick_start_offset_y=brick_start_offset_y,
         placements=placements,
+        sky_horizon=sky_horizon,
     )
 
 
