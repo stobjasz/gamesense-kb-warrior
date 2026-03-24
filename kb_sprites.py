@@ -1,10 +1,250 @@
 from __future__ import annotations
+import json
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 from PIL import Image
 from kb_config import FRAMES_PER_CHARACTER, RIGHT_SPRITE_BASE_TARGET_X, TILE_SIZE, WARRIOR_ATTACK_PATH, WARRIOR_BLOCK_PATH, WARRIOR_IDLE_PATH, WARRIOR_RUN_PATH
 from kb_progression import compute_monster_hp
+
+
+@dataclass(frozen=True)
+class SceneSpriteConfig:
+    sprite_id: str
+    kind: str
+    image_path: Path
+    frame_count: int
+    expected_size: tuple[int, int] | None
+
+
+@dataclass(frozen=True)
+class SceneDistributionRule:
+    mode: str
+    interval_px: int
+    count_per_interval: int
+    bootstrap_intervals: int
+
+
+@dataclass(frozen=True)
+class ScenePlacementRule:
+    sprite_id: str
+    y_anchor: str
+    clear_under_sprite: bool
+    avoid_overlap_with: List[str]
+    overlap_margin: int
+    distribution: SceneDistributionRule
+
+
+@dataclass(frozen=True)
+class CorridorSceneConfig:
+    sprites: Dict[str, SceneSpriteConfig]
+    wall_brick_sprite_ids: List[str]
+    floor_sprite_id: str
+    floor_height: int
+    brick_start_offset_x: int
+    brick_start_offset_y: int
+    placements: List[ScenePlacementRule]
+
+
+def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
+    if not path.is_file():
+        raise FileNotFoundError(f"Corridor scene config not found: {path}")
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid corridor scene config JSON '{path}': {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise ValueError("Corridor scene config root must be a JSON object")
+
+    base_dir = path.parent
+
+    sprites_raw = raw.get("sprites")
+    if not isinstance(sprites_raw, list) or not sprites_raw:
+        raise ValueError("Corridor scene config 'sprites' must be a non-empty array")
+
+    def _read_size(raw_size: object, field_name: str) -> tuple[int, int] | None:
+        if raw_size is None:
+            return None
+        if (
+            not isinstance(raw_size, list)
+            or len(raw_size) != 2
+            or not all(isinstance(v, int) and v > 0 for v in raw_size)
+        ):
+            raise ValueError(f"Corridor scene config '{field_name}' must be [width, height] of positive ints")
+        return (raw_size[0], raw_size[1])
+
+    sprites: Dict[str, SceneSpriteConfig] = {}
+    for i, sprite_raw in enumerate(sprites_raw):
+        if not isinstance(sprite_raw, dict):
+            raise ValueError(f"Corridor scene config 'sprites[{i}]' must be an object")
+        sprite_id = sprite_raw.get("id")
+        if not isinstance(sprite_id, str) or not sprite_id.strip():
+            raise ValueError(f"Corridor scene config 'sprites[{i}].id' must be a non-empty string")
+        if sprite_id in sprites:
+            raise ValueError(f"Corridor scene config has duplicate sprite id: '{sprite_id}'")
+
+        kind = sprite_raw.get("kind", "static")
+        if kind not in {"static", "animated_strip"}:
+            raise ValueError(f"Corridor scene config sprite '{sprite_id}' kind must be 'static' or 'animated_strip'")
+
+        image_rel = sprite_raw.get("image")
+        if not isinstance(image_rel, str) or not image_rel.strip():
+            raise ValueError(f"Corridor scene config 'sprites[{i}].image' must be a non-empty string")
+
+        frame_count = sprite_raw.get("frame_count", 1)
+        if not isinstance(frame_count, int) or frame_count <= 0:
+            raise ValueError(f"Corridor scene config sprite '{sprite_id}' frame_count must be a positive integer")
+        if kind == "static" and frame_count != 1:
+            raise ValueError(f"Corridor scene config sprite '{sprite_id}' is static and must use frame_count=1")
+
+        sprites[sprite_id] = SceneSpriteConfig(
+            sprite_id=sprite_id,
+            kind=kind,
+            image_path=base_dir / image_rel,
+            frame_count=frame_count,
+            expected_size=_read_size(sprite_raw.get("size"), f"sprites[{i}].size"),
+        )
+
+    composition = raw.get("composition")
+    if not isinstance(composition, dict):
+        raise ValueError("Corridor scene config 'composition' must be an object")
+
+    def _read_non_negative_int(name: str) -> int:
+        value = composition.get(name)
+        if not isinstance(value, int) or value < 0:
+            raise ValueError(f"Corridor scene config 'composition.{name}' must be a non-negative integer")
+        return value
+
+    wall_raw = composition.get("wall")
+    if not isinstance(wall_raw, dict):
+        raise ValueError("Corridor scene config 'composition.wall' must be an object")
+    wall_brick_sprite_ids = wall_raw.get("brick_sprite_ids")
+    if not isinstance(wall_brick_sprite_ids, list) or not wall_brick_sprite_ids:
+        raise ValueError("Corridor scene config 'composition.wall.brick_sprite_ids' must be a non-empty array")
+    for i, sprite_id in enumerate(wall_brick_sprite_ids):
+        if not isinstance(sprite_id, str) or sprite_id not in sprites:
+            raise ValueError(f"Corridor scene config 'composition.wall.brick_sprite_ids[{i}]' must reference an existing sprite id")
+
+    floor_raw = composition.get("floor")
+    if not isinstance(floor_raw, dict):
+        raise ValueError("Corridor scene config 'composition.floor' must be an object")
+    floor_sprite_id = floor_raw.get("sprite_id")
+    if not isinstance(floor_sprite_id, str) or floor_sprite_id not in sprites:
+        raise ValueError("Corridor scene config 'composition.floor.sprite_id' must reference an existing sprite id")
+    floor_height = floor_raw.get("height")
+    if not isinstance(floor_height, int) or floor_height < 0:
+        raise ValueError("Corridor scene config 'composition.floor.height' must be a non-negative integer")
+
+    placements_raw = composition.get("placements", [])
+    if not isinstance(placements_raw, list):
+        raise ValueError("Corridor scene config 'composition.placements' must be an array")
+
+    placements: List[ScenePlacementRule] = []
+    for i, placement_raw in enumerate(placements_raw):
+        if not isinstance(placement_raw, dict):
+            raise ValueError(f"Corridor scene config 'composition.placements[{i}]' must be an object")
+        sprite_id = placement_raw.get("sprite_id")
+        if not isinstance(sprite_id, str) or sprite_id not in sprites:
+            raise ValueError(f"Corridor scene config placement[{i}] sprite_id must reference an existing sprite id")
+
+        y_anchor = placement_raw.get("y_anchor", "wall_center")
+        if y_anchor not in {"wall_center", "floor_top"}:
+            raise ValueError(f"Corridor scene config placement[{i}] y_anchor must be 'wall_center' or 'floor_top'")
+
+        clear_under_sprite = bool(placement_raw.get("clear_under_sprite", False))
+
+        avoid_overlap_with_raw = placement_raw.get("avoid_overlap_with", [])
+        if not isinstance(avoid_overlap_with_raw, list):
+            raise ValueError(f"Corridor scene config placement[{i}] avoid_overlap_with must be an array")
+        avoid_overlap_with: List[str] = []
+        for j, avoid_id in enumerate(avoid_overlap_with_raw):
+            if not isinstance(avoid_id, str) or avoid_id not in sprites:
+                raise ValueError(f"Corridor scene config placement[{i}].avoid_overlap_with[{j}] must reference an existing sprite id")
+            avoid_overlap_with.append(avoid_id)
+
+        overlap_margin = placement_raw.get("overlap_margin", 0)
+        if not isinstance(overlap_margin, int) or overlap_margin < 0:
+            raise ValueError(f"Corridor scene config placement[{i}] overlap_margin must be a non-negative integer")
+
+        distribution_raw = placement_raw.get("distribution")
+        if not isinstance(distribution_raw, dict):
+            raise ValueError(f"Corridor scene config placement[{i}] distribution must be an object")
+        mode = distribution_raw.get("mode")
+        if mode not in {"segmented_random", "repeat_every"}:
+            raise ValueError(f"Corridor scene config placement[{i}] distribution.mode must be 'segmented_random' or 'repeat_every'")
+        interval_px = distribution_raw.get("interval_px")
+        if not isinstance(interval_px, int) or interval_px <= 0:
+            raise ValueError(f"Corridor scene config placement[{i}] distribution.interval_px must be > 0")
+        count_per_interval = distribution_raw.get("count_per_interval", 1)
+        if not isinstance(count_per_interval, int) or count_per_interval <= 0:
+            raise ValueError(f"Corridor scene config placement[{i}] distribution.count_per_interval must be > 0")
+        bootstrap_intervals = distribution_raw.get("bootstrap_intervals", 0)
+        if not isinstance(bootstrap_intervals, int) or bootstrap_intervals < 0:
+            raise ValueError(f"Corridor scene config placement[{i}] distribution.bootstrap_intervals must be >= 0")
+
+        placements.append(ScenePlacementRule(
+            sprite_id=sprite_id,
+            y_anchor=y_anchor,
+            clear_under_sprite=clear_under_sprite,
+            avoid_overlap_with=avoid_overlap_with,
+            overlap_margin=overlap_margin,
+            distribution=SceneDistributionRule(
+                mode=mode,
+                interval_px=interval_px,
+                count_per_interval=count_per_interval,
+                bootstrap_intervals=bootstrap_intervals,
+            ),
+        ))
+
+    return CorridorSceneConfig(
+        sprites=sprites,
+        wall_brick_sprite_ids=wall_brick_sprite_ids,
+        floor_sprite_id=floor_sprite_id,
+        floor_height=floor_height,
+        brick_start_offset_x=_read_non_negative_int("brick_start_offset_x"),
+        brick_start_offset_y=_read_non_negative_int("brick_start_offset_y"),
+        placements=placements,
+    )
+
+
+def load_corridor_scene_assets(scene: CorridorSceneConfig) -> tuple[Dict[str, List[List[int]]], Dict[str, List[List[List[int]]]]]:
+    """Load all scene sprites by id. Returns (static_sprites, animated_sprites)."""
+    static_sprites: Dict[str, List[List[int]]] = {}
+    animated_sprites: Dict[str, List[List[List[int]]]] = {}
+
+    for sprite_id, sprite in scene.sprites.items():
+        if sprite.kind == "animated_strip":
+            frames = load_corridor_torch_frames(sprite.image_path, sprite.frame_count)
+            if not frames or not frames[0] or not frames[0][0]:
+                raise ValueError(f"Scene sprite '{sprite_id}' has invalid frame dimensions")
+            if sprite.expected_size is not None:
+                expected_w, expected_h = sprite.expected_size
+                actual_h = len(frames[0])
+                actual_w = len(frames[0][0])
+                if actual_w != expected_w or actual_h != expected_h:
+                    raise ValueError(
+                        f"Scene sprite '{sprite_id}' expected frame size {sprite.expected_size}, got {(actual_w, actual_h)}"
+                    )
+            animated_sprites[sprite_id] = frames
+            continue
+
+        tile = load_corridor_door(sprite.image_path)
+        if not tile or not tile[0]:
+            raise ValueError(f"Scene sprite '{sprite_id}' has invalid dimensions")
+        if sprite.expected_size is not None:
+            expected_w, expected_h = sprite.expected_size
+            actual_h = len(tile)
+            actual_w = len(tile[0])
+            if actual_w != expected_w or actual_h != expected_h:
+                raise ValueError(
+                    f"Scene sprite '{sprite_id}' expected size {sprite.expected_size}, got {(actual_w, actual_h)}"
+                )
+        static_sprites[sprite_id] = tile
+
+    return static_sprites, animated_sprites
 
 
 def _tile_to_canvas(tile_image: Image.Image) -> List[List[int]]:

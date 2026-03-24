@@ -1,0 +1,90 @@
+{
+  "sprites": [
+    {
+      "id": "brick_base",
+      "kind": "static",
+      "image": "brick.png",
+      "size": [13, 9]
+    },
+    {
+      "id": "brick_alt_1",
+      "kind": "static",
+      "image": "brick2.png",
+      "size": [13, 9]
+    },
+    {
+      "id": "brick_alt_2",
+      "kind": "static",
+      "image": "brick3.png",
+      "size": [13, 9]
+    },
+    {
+      "id": "brick_alt_3",
+      "kind": "static",
+      "image": "brick4.png",
+      "size": [13, 9]
+    },
+    {
+      "id": "floor_main",
+      "kind": "static",
+      "image": "floor.png",
+      "size": [128, 9]
+    },
+    {
+      "id": "door_main",
+      "kind": "static",
+      "image": "door.png",
+      "size": [18, 27]
+    },
+    {
+      "id": "torch_wall",
+      "kind": "animated_strip",
+      "image": "torch.png",
+      "frame_count": 3,
+      "size": [8, 20]
+    }
+  ],
+  "composition": {
+    "floor_height": 9,
+    "brick_start_offset_x": 7,
+    "brick_start_offset_y": 3,
+    "wall": {
+      "brick_sprite_ids": [
+        "brick_base",
+        "brick_alt_1",
+        "brick_alt_2",
+        "brick_alt_3"
+      ]
+    },
+    "floor": {
+      "sprite_id": "floor_main",
+      "height": 9
+    },
+    "placements": [
+      {
+        "sprite_id": "door_main",
+        "y_anchor": "floor_top",
+        "clear_under_sprite": true,
+        "distribution": {
+          "mode": "segmented_random",
+          "interval_px": 256,
+          "count_per_interval": 1,
+          "bootstrap_intervals": 1
+        }
+      },
+      {
+        "sprite_id": "torch_wall",
+        "y_anchor": "wall_center",
+        "avoid_overlap_with": [
+          "door_main"
+        ],
+        "overlap_margin": 1,
+        "distribution": {
+          "mode": "repeat_every",
+          "interval_px": 150,
+          "count_per_interval": 2
+        }
+      }
+    ]
+  }
+}

@@ -1,17 +1,22 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List
-from kb_config import BACKGROUND_TILE_SIZE, BRICK_START_OFFSET_X, BRICK_START_OFFSET_Y, CORRIDOR_FLOOR_HEIGHT, DOOR_FIRST_SCREENS, DOOR_SEGMENT_SCREENS, FONT_5X7, HEALTH_BAR_WIDTH, HEALTH_BAR_Y, HEIGHT, LEFT_SPRITE_X, SLASHFX_X_OFFSET, TILE_SIZE, TORCHES_PER_SCREEN, WIDTH
+from typing import Dict, List
+from kb_config import BACKGROUND_TILE_SIZE, FONT_5X7, HEALTH_BAR_WIDTH, HEALTH_BAR_Y, HEIGHT, LEFT_SPRITE_X, SLASHFX_X_OFFSET, TILE_SIZE, WIDTH
+from kb_sprites import ScenePlacementRule
 
 
 @dataclass(frozen=True)
 class RenderState:
-    background_brick_tiles: List[List[List[int]]]
+    background_wall_brick_tiles: List[List[List[int]]]
     background_floor_tile: List[List[int]]
-    background_door_tile: List[List[int]]
-    background_torch_frames: List[List[List[int]]]
+    scene_static_sprites: Dict[str, List[List[int]]]
+    scene_animated_sprites: Dict[str, List[List[List[int]]]]
+    scene_placements: List[ScenePlacementRule]
     background_scroll_x: float
     background_anim_tick: int
+    corridor_floor_height: int
+    corridor_brick_start_offset_x: int
+    corridor_brick_start_offset_y: int
     right_sprite_tile: List[List[int]]
     right_sprite_x: int
     left_sprite_tile: List[List[int]]
@@ -142,18 +147,6 @@ def _pick_brick_variant(
     return 0
 
 
-def _pick_door_world_x(segment_idx: int, segment_width: int, door_w: int) -> int | None:
-    start_x = segment_idx * segment_width
-    span = max(1, segment_width - door_w)
-    h = _hash2(segment_idx, 131)
-    return start_x + (h % span)
-
-
-def _pick_bootstrap_door_world_x(bootstrap_width: int, door_w: int) -> int:
-    span = max(1, bootstrap_width - door_w)
-    return _hash2(0, 911) % span
-
-
 def _rects_touch_or_overlap(ax: int, ay: int, aw: int, ah: int, bx: int, by: int, bw: int, bh: int, margin: int = 0) -> bool:
     return not (
         (ax + aw + margin) < bx
@@ -165,19 +158,23 @@ def _rects_touch_or_overlap(ax: int, ay: int, aw: int, ah: int, bx: int, by: int
 
 def draw_scrolling_corridor_background(
     canvas: List[List[int]],
-    brick_tiles: List[List[List[int]]],
+    wall_brick_tiles: List[List[List[int]]],
     floor_tile: List[List[int]],
-    door_tile: List[List[int]],
-    torch_frames: List[List[List[int]]],
+    static_sprites: Dict[str, List[List[int]]],
+    animated_sprites: Dict[str, List[List[List[int]]]],
+    placement_rules: List[ScenePlacementRule],
     scroll_x: int,
     anim_tick: int,
+    floor_height: int,
+    brick_start_offset_x: int,
+    brick_start_offset_y: int,
 ) -> None:
-    if not brick_tiles:
+    if not wall_brick_tiles:
         return
-    brick_w, brick_h = len(brick_tiles[0][0]), len(brick_tiles[0])
+    brick_w, brick_h = len(wall_brick_tiles[0][0]), len(wall_brick_tiles[0])
     floor_w, floor_h = len(floor_tile[0]), len(floor_tile)
 
-    floor_draw_h = min(CORRIDOR_FLOOR_HEIGHT, HEIGHT, floor_h)
+    floor_draw_h = min(max(0, floor_height), HEIGHT, floor_h)
     wall_h = max(0, HEIGHT - floor_draw_h)
 
     scroll_px = int(scroll_x)
@@ -188,21 +185,21 @@ def draw_scrolling_corridor_background(
     brick_step_x = max(1, brick_w - 1)
     brick_step_y = max(1, brick_h - 1)
     half_brick_step_x = max(1, brick_step_x // 2)
-    alt_a, alt_b = _pick_alt_indices(len(brick_tiles))
+    alt_a, alt_b = _pick_alt_indices(len(wall_brick_tiles))
 
     # Wall (brick) region; odd rows are shifted by half-brick for overlap pattern.
     for y in range(wall_h):
-        world_y = y + BRICK_START_OFFSET_Y
+        world_y = y + brick_start_offset_y
         brick_row = world_y // brick_step_y
         brick_y = world_y % brick_step_y
         row_shift = half_brick_step_x if (brick_row % 2) else 0
         # Draw one extra brick-step worth of columns as right-side buffer.
         for x in range(WIDTH + brick_step_x):
-            world_x = x + offset_x + BRICK_START_OFFSET_X + row_shift
+            world_x = x + offset_x + brick_start_offset_x + row_shift
             brick_col = world_x // brick_step_x
             brick_x = world_x % brick_step_x
-            variant_idx = _pick_brick_variant(brick_col, brick_row, len(brick_tiles), alt_a, alt_b)
-            brick_tile = brick_tiles[variant_idx]
+            variant_idx = _pick_brick_variant(brick_col, brick_row, len(wall_brick_tiles), alt_a, alt_b)
+            brick_tile = wall_brick_tiles[variant_idx]
             pixel = brick_tile[brick_y][brick_x]
             if pixel and x < WIDTH:
                 canvas[y][x] = 1
@@ -217,65 +214,74 @@ def draw_scrolling_corridor_background(
             if floor_tile[fy][fx]:
                 canvas[y][x] = 1
 
-    # Rare door on wall: aligned so door bottom touches floor top.
-    # Drawn after bricks so it appears on top of the wall pattern.
-    door_h = len(door_tile)
-    door_w = len(door_tile[0]) if door_h > 0 else 0
-    if door_w > 0 and door_h > 0:
-        world_left = scroll_px
-        world_right = world_left + WIDTH
-        door_y = HEIGHT - floor_draw_h - door_h
-        visible_door_rects: List[tuple[int, int, int, int]] = []
+    world_left = scroll_px
+    world_right = world_left + WIDTH
+    placed_rects: Dict[str, List[tuple[int, int, int, int]]] = {}
 
-        # Guarantee one door within the first N full screens.
-        bootstrap_width = max(1, DOOR_FIRST_SCREENS * WIDTH)
-        if world_left < bootstrap_width:
-            door_world_x = _pick_bootstrap_door_world_x(bootstrap_width, door_w)
-            door_screen_x = door_world_x - world_left
-            visible_door_rects.append((door_world_x, door_y, door_w, door_h))
-            fill_rect(canvas, door_screen_x, door_y, door_w, door_h, 0)
-            draw_tile_on_canvas(canvas, door_tile, door_screen_x, door_y)
+    for rule in placement_rules:
+        static_tile = static_sprites.get(rule.sprite_id)
+        animated_frames = animated_sprites.get(rule.sprite_id)
+        if static_tile is None and not animated_frames:
+            continue
 
-        # After the bootstrap area: one door every M screens.
-        segment_width = max(1, DOOR_SEGMENT_SCREENS * WIDTH)
-        shifted_left = max(0, world_left - bootstrap_width)
-        shifted_right = max(0, world_right - bootstrap_width)
-        seg_start = shifted_left // segment_width
-        seg_end = shifted_right // segment_width
+        tile = static_tile
+        if tile is None and animated_frames:
+            tile = animated_frames[anim_tick % len(animated_frames)]
+        if tile is None:
+            continue
+
+        sprite_h = len(tile)
+        sprite_w = len(tile[0]) if sprite_h > 0 else 0
+        if sprite_w <= 0 or sprite_h <= 0:
+            continue
+
+        if rule.y_anchor == "floor_top":
+            sprite_y = HEIGHT - floor_draw_h - sprite_h
+        else:
+            sprite_y = max(0, (wall_h - sprite_h) // 2)
+
+        interval = max(1, rule.distribution.interval_px)
+        count = max(1, rule.distribution.count_per_interval)
+        seg_start = (world_left // interval) - 1
+        seg_end = (world_right // interval) + 1
+        bootstrap_count = max(0, rule.distribution.bootstrap_intervals)
+
         for seg in range(seg_start, seg_end + 1):
-            door_world_x = bootstrap_width + _pick_door_world_x(seg, segment_width, door_w)
-            door_screen_x = door_world_x - world_left
-            visible_door_rects.append((door_world_x, door_y, door_w, door_h))
-            fill_rect(canvas, door_screen_x, door_y, door_w, door_h, 0)
-            draw_tile_on_canvas(canvas, door_tile, door_screen_x, door_y)
+            if seg < 0:
+                continue
+            if bootstrap_count > 0 and seg >= bootstrap_count and seg_start < bootstrap_count:
+                # still allow regular placement after bootstrap zone
+                pass
 
-        # Torches on the middle of the wall, randomized in world space and animated.
-        if torch_frames:
-            torch_frame = torch_frames[anim_tick % len(torch_frames)]
-            torch_h = len(torch_frame)
-            torch_w = len(torch_frame[0]) if torch_h > 0 else 0
-            if torch_w > 0 and torch_h > 0 and wall_h > 0:
-                torch_y = max(0, (wall_h - torch_h) // 2)
-                screen_idx_start = (world_left // WIDTH) - 1
-                screen_idx_end = (world_right // WIDTH) + 1
-                for screen_idx in range(screen_idx_start, screen_idx_end + 1):
-                    for i in range(max(0, TORCHES_PER_SCREEN)):
-                        x_span = max(1, WIDTH - torch_w)
-                        local_x = _hash2(screen_idx, 4001 + i * 97) % x_span
-                        torch_world_x = screen_idx * WIDTH + local_x
+            for i in range(count):
+                seg_x0 = seg * interval
+                if rule.distribution.mode == "repeat_every":
+                    local_x = (i * interval) // count
+                    world_x = seg_x0 + local_x
+                else:
+                    x_span = max(1, interval - sprite_w)
+                    local_x = _hash2(seg, 4001 + i * 97 + _hash2(len(rule.sprite_id), i)) % x_span
+                    world_x = seg_x0 + local_x
 
-                        blocked_by_door = False
-                        for door_world_x, dy, dw, dh in visible_door_rects:
-                            if _rects_touch_or_overlap(torch_world_x, torch_y, torch_w, torch_h, door_world_x, dy, dw, dh, margin=1):
-                                blocked_by_door = True
-                                break
-                        if blocked_by_door:
-                            continue
+                blocked = False
+                for avoid_id in rule.avoid_overlap_with:
+                    for ox, oy, ow, oh in placed_rects.get(avoid_id, []):
+                        if _rects_touch_or_overlap(world_x, sprite_y, sprite_w, sprite_h, ox, oy, ow, oh, margin=rule.overlap_margin):
+                            blocked = True
+                            break
+                    if blocked:
+                        break
+                if blocked:
+                    continue
 
-                        torch_screen_x = torch_world_x - world_left
-                        if torch_screen_x <= -torch_w or torch_screen_x >= WIDTH:
-                            continue
-                        draw_tile_on_canvas(canvas, torch_frame, torch_screen_x, torch_y)
+                screen_x = world_x - world_left
+                if screen_x <= -sprite_w or screen_x >= WIDTH:
+                    continue
+
+                if rule.clear_under_sprite:
+                    fill_rect(canvas, screen_x, sprite_y, sprite_w, sprite_h, 0)
+                draw_tile_on_canvas(canvas, tile, screen_x, sprite_y)
+                placed_rects.setdefault(rule.sprite_id, []).append((world_x, sprite_y, sprite_w, sprite_h))
 
 
 def draw_rounded_health_bar(canvas: List[List[int]], x: int, y: int, width: int, current: int, max_val: int) -> None:
@@ -331,12 +337,16 @@ def compose_frame(state: RenderState) -> List[int]:
     canvas = [[0] * WIDTH for _ in range(HEIGHT)]
     draw_scrolling_corridor_background(
         canvas,
-        state.background_brick_tiles,
+        state.background_wall_brick_tiles,
         state.background_floor_tile,
-        state.background_door_tile,
-        state.background_torch_frames,
+        state.scene_static_sprites,
+        state.scene_animated_sprites,
+        state.scene_placements,
         state.background_scroll_x,
         state.background_anim_tick,
+        state.corridor_floor_height,
+        state.corridor_brick_start_offset_x,
+        state.corridor_brick_start_offset_y,
     )
     draw_tile_on_canvas(canvas, state.right_sprite_tile, state.right_sprite_x, HEIGHT - TILE_SIZE)
     draw_tile_on_canvas(canvas, state.left_sprite_tile, state.left_sprite_x, HEIGHT - TILE_SIZE)

@@ -260,20 +260,26 @@ def main() -> int:
     atexit.register(kb_lock.release_instance_lock, lock_fd, lock_path)
 
     try:
+        corridor_scene = kb_sprites.load_corridor_scene_config(cfg.CORRIDOR_SCENE_CONFIG_PATH)
+        scene_static_sprites, scene_animated_sprites = kb_sprites.load_corridor_scene_assets(corridor_scene)
+
+        background_wall_brick_tiles = [
+            scene_static_sprites[sprite_id] for sprite_id in corridor_scene.wall_brick_sprite_ids
+        ]
+        if not background_wall_brick_tiles:
+            raise ValueError("Corridor scene must define at least one wall brick sprite")
+
+        background_floor_tile = scene_static_sprites.get(corridor_scene.floor_sprite_id)
+        if background_floor_tile is None:
+            raise ValueError(
+                f"Corridor floor sprite '{corridor_scene.floor_sprite_id}' must be a static sprite"
+            )
+
         character_frames = kb_sprites.load_character_frames(cfg.SPRITESHEET_PATH)
         warrior_animations = kb_sprites.load_warrior_animations()
         deathfx_frames = kb_sprites.load_sprite_strip_frames(cfg.DEATH_FX_PATH, 4)
         slashfx_frames = kb_sprites.load_slashfx_frames(cfg.SLASH_FX_PATH)
         drop_tiles = kb_sprites.load_drop_tiles(cfg.DROPS_PATH)
-        background_brick_tiles, background_floor_tile = kb_sprites.load_corridor_background(
-            cfg.CORRIDOR_BRICK_VARIANT_PATHS,
-            cfg.CORRIDOR_FLOOR_PATH,
-        )
-        background_door_tile = kb_sprites.load_corridor_door(cfg.CORRIDOR_DOOR_PATH)
-        background_torch_frames = kb_sprites.load_corridor_torch_frames(
-            cfg.CORRIDOR_TORCH_PATH,
-            cfg.CORRIDOR_TORCH_FRAME_COUNT,
-        )
     except (OSError, ValueError) as exc:
         print(f"Asset loading error: {exc}", file=sys.stderr)
         return 1
@@ -507,12 +513,16 @@ def main() -> int:
                 drop_y = int(active_drop.y)
 
             frame = kb_render.compose_frame(kb_render.RenderState(
-                background_brick_tiles=background_brick_tiles,
+                background_wall_brick_tiles=background_wall_brick_tiles,
                 background_floor_tile=background_floor_tile,
-                background_door_tile=background_door_tile,
-                background_torch_frames=background_torch_frames,
+                scene_static_sprites=scene_static_sprites,
+                scene_animated_sprites=scene_animated_sprites,
+                scene_placements=corridor_scene.placements,
                 background_scroll_x=background_scroll_x,
                 background_anim_tick=background_anim_tick,
+                corridor_floor_height=corridor_scene.floor_height,
+                corridor_brick_start_offset_x=corridor_scene.brick_start_offset_x,
+                corridor_brick_start_offset_y=corridor_scene.brick_start_offset_y,
                 right_sprite_tile=right_sprite_tile,
                 right_sprite_x=int(monster.x),
                 left_sprite_tile=warrior_tile,
