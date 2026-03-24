@@ -31,6 +31,7 @@ class ScenePlacementRule:
     sprite_id: str
     y_anchor: str
     clear_under_sprite: bool
+    composite_mode: str
     avoid_overlap_with: List[str]
     overlap_margin: int
     distribution: SceneDistributionRule
@@ -54,6 +55,7 @@ class CorridorSceneConfig:
     floor_height: int
     brick_start_offset_x: int
     brick_start_offset_y: int
+    wall_underlay: SceneSkyHorizonConfig | None
     placements: List[ScenePlacementRule]
     sky_horizon: SceneSkyHorizonConfig | None
 
@@ -98,8 +100,8 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
             raise ValueError(f"Corridor scene config has duplicate sprite id: '{sprite_id}'")
 
         kind = sprite_raw.get("kind", "static")
-        if kind not in {"static", "animated_strip"}:
-            raise ValueError(f"Corridor scene config sprite '{sprite_id}' kind must be 'static' or 'animated_strip'")
+        if kind not in {"static", "static_alpha", "animated_strip"}:
+            raise ValueError(f"Corridor scene config sprite '{sprite_id}' kind must be 'static', 'static_alpha' or 'animated_strip'")
 
         image_rel = sprite_raw.get("image")
         if not isinstance(image_rel, str) or not image_rel.strip():
@@ -108,7 +110,7 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
         frame_count = sprite_raw.get("frame_count", 1)
         if not isinstance(frame_count, int) or frame_count <= 0:
             raise ValueError(f"Corridor scene config sprite '{sprite_id}' frame_count must be a positive integer")
-        if kind == "static" and frame_count != 1:
+        if kind in {"static", "static_alpha"} and frame_count != 1:
             raise ValueError(f"Corridor scene config sprite '{sprite_id}' is static and must use frame_count=1")
 
         sprites[sprite_id] = SceneSpriteConfig(
@@ -132,6 +134,7 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
     floor_height = 0
     brick_start_offset_x = 0
     brick_start_offset_y = 0
+    wall_underlay: SceneSkyHorizonConfig | None = None
     sky_horizon: SceneSkyHorizonConfig | None = None
 
     if scene_mode == "brick_floor":
@@ -163,6 +166,38 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
 
         brick_start_offset_x = _read_non_negative_int("brick_start_offset_x")
         brick_start_offset_y = _read_non_negative_int("brick_start_offset_y")
+
+        wall_underlay_raw = composition.get("wall_underlay")
+        if wall_underlay_raw is not None:
+            if not isinstance(wall_underlay_raw, dict):
+                raise ValueError("Corridor scene config 'composition.wall_underlay' must be an object")
+            underlay_sprite_id = wall_underlay_raw.get("sprite_id")
+            if not isinstance(underlay_sprite_id, str) or underlay_sprite_id not in sprites:
+                raise ValueError("Corridor scene config 'composition.wall_underlay.sprite_id' must reference an existing sprite id")
+            underlay_scroll_divisor = wall_underlay_raw.get("scroll_divisor", 1)
+            if not isinstance(underlay_scroll_divisor, int) or underlay_scroll_divisor <= 0:
+                raise ValueError("Corridor scene config 'composition.wall_underlay.scroll_divisor' must be > 0")
+            underlay_base_y = wall_underlay_raw.get("horizon_base_y")
+            if not isinstance(underlay_base_y, int):
+                raise ValueError("Corridor scene config 'composition.wall_underlay.horizon_base_y' must be an integer")
+            underlay_horizon_scroll_divisor = wall_underlay_raw.get("horizon_scroll_divisor", 3)
+            if not isinstance(underlay_horizon_scroll_divisor, int) or underlay_horizon_scroll_divisor <= 0:
+                raise ValueError("Corridor scene config 'composition.wall_underlay.horizon_scroll_divisor' must be > 0")
+            underlay_offsets = wall_underlay_raw.get("horizon_offsets")
+            if (
+                not isinstance(underlay_offsets, list)
+                or not underlay_offsets
+                or not all(isinstance(v, int) for v in underlay_offsets)
+            ):
+                raise ValueError("Corridor scene config 'composition.wall_underlay.horizon_offsets' must be a non-empty integer array")
+
+            wall_underlay = SceneSkyHorizonConfig(
+                sky_sprite_id=underlay_sprite_id,
+                sky_scroll_divisor=underlay_scroll_divisor,
+                horizon_base_y=underlay_base_y,
+                horizon_scroll_divisor=underlay_horizon_scroll_divisor,
+                horizon_offsets=underlay_offsets,
+            )
     else:
         sky_raw = composition.get("sky")
         if not isinstance(sky_raw, dict):
@@ -216,6 +251,9 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
             raise ValueError(f"Corridor scene config placement[{i}] y_anchor must be 'wall_center' or 'floor_top'")
 
         clear_under_sprite = bool(placement_raw.get("clear_under_sprite", False))
+        composite_mode = placement_raw.get("composite_mode", "normal")
+        if composite_mode not in {"normal", "transparent_cutout"}:
+            raise ValueError(f"Corridor scene config placement[{i}] composite_mode must be 'normal' or 'transparent_cutout'")
 
         avoid_overlap_with_raw = placement_raw.get("avoid_overlap_with", [])
         if not isinstance(avoid_overlap_with_raw, list):
@@ -250,6 +288,7 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
             sprite_id=sprite_id,
             y_anchor=y_anchor,
             clear_under_sprite=clear_under_sprite,
+            composite_mode=composite_mode,
             avoid_overlap_with=avoid_overlap_with,
             overlap_margin=overlap_margin,
             distribution=SceneDistributionRule(
@@ -268,6 +307,7 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
         floor_height=floor_height,
         brick_start_offset_x=brick_start_offset_x,
         brick_start_offset_y=brick_start_offset_y,
+        wall_underlay=wall_underlay,
         placements=placements,
         sky_horizon=sky_horizon,
     )
@@ -292,6 +332,21 @@ def load_corridor_scene_assets(scene: CorridorSceneConfig) -> tuple[Dict[str, Li
                         f"Scene sprite '{sprite_id}' expected frame size {sprite.expected_size}, got {(actual_w, actual_h)}"
                     )
             animated_sprites[sprite_id] = frames
+            continue
+
+        if sprite.kind == "static_alpha":
+            tile = _image_to_canvas(Image.open(sprite.image_path))
+            if not tile or not tile[0]:
+                raise ValueError(f"Scene sprite '{sprite_id}' has invalid dimensions")
+            if sprite.expected_size is not None:
+                expected_w, expected_h = sprite.expected_size
+                actual_h = len(tile)
+                actual_w = len(tile[0])
+                if actual_w != expected_w or actual_h != expected_h:
+                    raise ValueError(
+                        f"Scene sprite '{sprite_id}' expected size {sprite.expected_size}, got {(actual_w, actual_h)}"
+                    )
+            static_sprites[sprite_id] = tile
             continue
 
         tile = load_corridor_door(sprite.image_path)

@@ -313,6 +313,7 @@ def render_scene_background_canvas(
         scene_cfg.floor_height,
         scene_cfg.brick_start_offset_x,
         scene_cfg.brick_start_offset_y,
+        scene_cfg.wall_underlay,
     )
     return canvas
 
@@ -771,6 +772,7 @@ def main() -> int:
                 corridor_floor_height=corridor_scene.floor_height,
                 corridor_brick_start_offset_x=corridor_scene.brick_start_offset_x,
                 corridor_brick_start_offset_y=corridor_scene.brick_start_offset_y,
+                corridor_wall_underlay=corridor_scene.wall_underlay,
                 right_sprite_tile=right_sprite_tile,
                 right_sprite_x=int(monster.x),
                 left_sprite_tile=warrior_tile,

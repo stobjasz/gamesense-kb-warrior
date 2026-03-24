@@ -19,6 +19,7 @@ class RenderState:
     corridor_floor_height: int
     corridor_brick_start_offset_x: int
     corridor_brick_start_offset_y: int
+    corridor_wall_underlay: SceneSkyHorizonConfig | None
     right_sprite_tile: List[List[int]]
     right_sprite_x: int
     left_sprite_tile: List[List[int]]
@@ -200,6 +201,7 @@ def draw_scrolling_corridor_background(
     floor_height: int,
     brick_start_offset_x: int,
     brick_start_offset_y: int,
+    wall_underlay: SceneSkyHorizonConfig | None,
 ) -> None:
     if not wall_brick_tiles:
         return
@@ -218,6 +220,21 @@ def draw_scrolling_corridor_background(
     brick_step_y = max(1, brick_h - 1)
     half_brick_step_x = max(1, brick_step_x // 2)
     alt_a, alt_b = _pick_alt_indices(len(wall_brick_tiles))
+
+    underlay_canvas: List[List[int]] | None = None
+    if wall_underlay is not None:
+        underlay_canvas = [[0] * WIDTH for _ in range(HEIGHT)]
+        underlay_tile = static_sprites.get(wall_underlay.sky_sprite_id)
+        if underlay_tile is not None:
+            draw_scrolling_sky_horizon_background(
+                underlay_canvas,
+                underlay_tile,
+                scroll_px,
+                wall_underlay.sky_scroll_divisor,
+                wall_underlay.horizon_base_y,
+                wall_underlay.horizon_offsets,
+                wall_underlay.horizon_scroll_divisor,
+            )
 
     # Wall (brick) region; odd rows are shifted by half-brick for overlap pattern.
     for y in range(wall_h):
@@ -307,13 +324,33 @@ def draw_scrolling_corridor_background(
                     continue
 
                 screen_x = world_x - world_left
+                # Register placement in world space even when currently off-screen.
+                # This keeps overlap decisions stable while scrolling.
+                placed_rects.setdefault(rule.sprite_id, []).append((world_x, sprite_y, sprite_w, sprite_h))
+
                 if screen_x <= -sprite_w or screen_x >= WIDTH:
                     continue
 
                 if rule.clear_under_sprite:
                     fill_rect(canvas, screen_x, sprite_y, sprite_w, sprite_h, 0)
-                draw_tile_on_canvas(canvas, tile, screen_x, sprite_y)
-                placed_rects.setdefault(rule.sprite_id, []).append((world_x, sprite_y, sprite_w, sprite_h))
+                if rule.composite_mode == "transparent_cutout" and underlay_canvas is not None:
+                    for sy in range(sprite_h):
+                        cy = sprite_y + sy
+                        if not (0 <= cy < HEIGHT):
+                            continue
+                        for sx in range(sprite_w):
+                            cx = screen_x + sx
+                            if not (0 <= cx < WIDTH):
+                                continue
+                            pixel = tile[sy][sx]
+                            if pixel == 0:
+                                canvas[cy][cx] = underlay_canvas[cy][cx]
+                            elif pixel == 1:
+                                canvas[cy][cx] = 1
+                            else:
+                                canvas[cy][cx] = 0
+                else:
+                    draw_tile_on_canvas(canvas, tile, screen_x, sprite_y)
 
 
 def draw_rounded_health_bar(canvas: List[List[int]], x: int, y: int, width: int, current: int, max_val: int) -> None:
@@ -396,6 +433,7 @@ def compose_frame(state: RenderState) -> List[int]:
             state.corridor_floor_height,
             state.corridor_brick_start_offset_x,
             state.corridor_brick_start_offset_y,
+            state.corridor_wall_underlay,
         )
     draw_tile_on_canvas(canvas, state.right_sprite_tile, state.right_sprite_x, HEIGHT - TILE_SIZE)
     draw_tile_on_canvas(canvas, state.left_sprite_tile, state.left_sprite_x, HEIGHT - TILE_SIZE)
