@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from dataclasses import dataclass
 from typing import Dict, List
 from kb_config import BACKGROUND_TILE_SIZE, FONT_5X7, HEALTH_BAR_WIDTH, HEALTH_BAR_Y, HEIGHT, LEFT_SPRITE_X, SLASHFX_X_OFFSET, TILE_SIZE, WIDTH
@@ -14,6 +15,7 @@ class RenderState:
     scene_animated_sprites: Dict[str, List[List[List[int]]]]
     scene_placements: List[ScenePlacementRule]
     scene_sky_horizon: SceneSkyHorizonConfig | None
+    roof_eli_sprite_id: str | None
     background_scroll_x: float
     background_anim_tick: int
     corridor_floor_height: int
@@ -99,6 +101,28 @@ def draw_tile_on_canvas(canvas: List[List[int]], tile: List[List[int]], x_offset
                 canvas[ty][tx] = 1 if pixel == 1 else 0
 
 
+def draw_line_on_canvas(canvas: List[List[int]], x0: int, y0: int, x1: int, y1: int, value: int = 1) -> None:
+    """Draw a line with Bresenham's algorithm."""
+    dx = abs(x1 - x0)
+    sx = 1 if x0 < x1 else -1
+    dy = -abs(y1 - y0)
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+
+    while True:
+        if 0 <= x0 < WIDTH and 0 <= y0 < HEIGHT:
+            canvas[y0][x0] = 1 if value else 0
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0 += sx
+        if e2 <= dx:
+            err += dx
+            y0 += sy
+
+
 def draw_scrolling_background(canvas: List[List[int]], tile: List[List[int]], scroll_x: int) -> None:
     raise NotImplementedError("use draw_scrolling_corridor_background")
 
@@ -131,6 +155,134 @@ def draw_scrolling_sky_horizon_background(
                 canvas[y][x] = 1
 
         canvas[horizon_y][x] = 1
+
+
+def draw_scrolling_roof01_background(
+    canvas: List[List[int]],
+    floor_tile: List[List[int]],
+    static_sprites: Dict[str, List[List[int]]],
+    roof_eli_sprite_id: str | None,
+    scroll_x: int,
+    anim_tick: int,
+    floor_height: int,
+) -> None:
+    if not floor_tile or not floor_tile[0]:
+        return
+
+    floor_w, floor_h = len(floor_tile[0]), len(floor_tile)
+    floor_draw_h = min(max(0, floor_height), HEIGHT, floor_h)
+    skyline_bottom = HEIGHT - floor_draw_h
+
+    eli_tile = static_sprites.get(roof_eli_sprite_id) if roof_eli_sprite_id else None
+    eli_x = WIDTH - 48
+    eli_y = 1
+
+    if eli_tile is not None and eli_tile and eli_tile[0]:
+        eli_h = len(eli_tile)
+        eli_w = len(eli_tile[0])
+        drift_x = int(round(2.0 * math.sin(anim_tick * 0.08)))
+        drift_y = int(round(1.5 * math.cos(anim_tick * 0.05)))
+        min_x = max(0, WIDTH - eli_w - (WIDTH // 3))
+        max_x = max(0, WIDTH - eli_w - 3)
+        max_y = max(0, min(skyline_bottom - eli_h - 1, 8))
+        eli_x = max(min_x, min(max_x, WIDTH - eli_w - 6 + drift_x))
+        eli_y = max(0, min(max_y, 2 + drift_y))
+
+        # Draw beams first so buildings/floor/ellipse occlude them.
+        cx = eli_x + (eli_w - 1) / 2.0
+        cy = eli_y + (eli_h - 1) / 2.0
+        rx = max(1.0, (eli_w - 1) / 2.0)
+        ry = max(1.0, (eli_h - 1) / 2.0)
+        angle = anim_tick * 0.42
+        base_angles = [math.pi, 0.0, -math.pi / 2.0, math.pi / 2.0]
+        for base in base_angles:
+            a = base + angle
+            sx = int(round(cx + rx * math.cos(a)))
+            sy = int(round(cy + ry * math.sin(a)))
+            draw_line_on_canvas(canvas, sx, sy, 0, HEIGHT - 1, 1)
+
+        # 2) Ellipse body next (inside now provided directly by sprite artwork).
+        draw_tile_on_canvas(canvas, eli_tile, eli_x, eli_y)
+
+    # Buildings as wall+roof silhouettes above the ledge; no bottom outlines.
+    building_scroll_x = int(scroll_x * 0.45)
+    cell_w = 16
+    max_building_h = max(6, skyline_bottom - 3)
+    start_cell = (building_scroll_x // cell_w) - 2
+    end_cell = ((building_scroll_x + WIDTH) // cell_w) + 2
+    for cell in range(start_cell, end_cell + 1):
+        if cell < 0:
+            continue
+        h_seed = _hash2(cell, 911)
+        building_h = 8 + (h_seed % 12)
+        if (h_seed % 11) == 0:
+            building_h += 5
+        building_h = min(building_h, max_building_h)
+
+        bw = 8 + (_hash2(cell, 127) % 6)
+        x_world = cell * cell_w + (_hash2(cell, 203) % 3)
+        x0 = x_world - building_scroll_x
+        x1 = x0 + bw - 1
+        y_base = skyline_bottom - 1
+        y_wall_top = max(0, y_base - building_h + 1)
+
+        if x1 < 0 or x0 >= WIDTH or y_wall_top >= HEIGHT:
+            continue
+
+        # clear wall body so background lines are fully hidden behind the building volume
+        if x1 > x0 and y_base > y_wall_top:
+            fill_rect(canvas, x0 + 1, y_wall_top + 1, max(0, x1 - x0 - 1), max(0, y_base - y_wall_top), 0)
+
+        # walls (no bottom line)
+        for y in range(max(0, y_wall_top), min(HEIGHT, y_base + 1)):
+            if 0 <= x0 < WIDTH:
+                canvas[y][x0] = 1
+            if 0 <= x1 < WIDTH:
+                canvas[y][x1] = 1
+
+        # roof ridge
+        roof_h = 2 + (_hash2(cell, 307) % 4)
+        peak_x = x0 + (bw // 2) + ((_hash2(cell, 409) % 3) - 1)
+        peak_y = max(0, y_wall_top - roof_h)
+        draw_line_on_canvas(canvas, x0, y_wall_top, peak_x, peak_y, 1)
+        draw_line_on_canvas(canvas, peak_x, peak_y, x1, y_wall_top, 1)
+
+        # top edge of wall under roof
+        for x in range(max(0, x0), min(WIDTH, x1 + 1)):
+            if 0 <= y_wall_top < HEIGHT:
+                canvas[y_wall_top][x] = 1
+
+        # sparse windows (few pixels)
+        for wy in range(y_wall_top + 2, y_base - 1, 4):
+            for wx in range(x0 + 2, x1 - 1, 4):
+                if not (0 <= wx < WIDTH and 0 <= wy < HEIGHT):
+                    continue
+                if (_hash2(cell + wx, wy + 37) % 5) == 0:
+                    canvas[wy][wx] = 1
+
+    # Fast floor with 18px chunk randomization from ledge strip.
+    floor_scroll_x = int(scroll_x * 2.4)
+    chunk_w = 18
+    chunk_count = max(1, floor_w // chunk_w)
+    if chunk_count == 0:
+        chunk_count = 1
+
+    floor_src_y_start = max(0, floor_h - floor_draw_h)
+    # Force floor region to fully occlude any background beams, even where floor texture has empty pixels.
+    fill_rect(canvas, 0, HEIGHT - floor_draw_h, WIDTH, floor_draw_h, 0)
+    for dy in range(floor_draw_h):
+        y = HEIGHT - floor_draw_h + dy
+        fy = floor_src_y_start + dy
+        for x in range(WIDTH):
+            world_x = x + floor_scroll_x
+            world_chunk = world_x // chunk_w
+            local_x = world_x % chunk_w
+            src_chunk = _hash2(world_chunk, 7331) % chunk_count
+            fx = (src_chunk * chunk_w + local_x) % floor_w
+            if floor_tile[fy][fx]:
+                canvas[y][x] = 1
+
+    # 4) Rest (foreground) is already drawn last via floor; ellipse/buildings were earlier by design.
 
 
 def _hash2(a: int, b: int) -> int:
@@ -419,6 +571,16 @@ def compose_frame(state: RenderState) -> List[int]:
             sky.horizon_base_y,
             sky.horizon_offsets,
             sky.horizon_scroll_divisor,
+        )
+    elif state.scene_mode == "roof01":
+        draw_scrolling_roof01_background(
+            canvas,
+            state.background_floor_tile,
+            state.scene_static_sprites,
+            state.roof_eli_sprite_id,
+            int(state.background_scroll_x),
+            state.background_anim_tick,
+            state.corridor_floor_height,
         )
     else:
         draw_scrolling_corridor_background(

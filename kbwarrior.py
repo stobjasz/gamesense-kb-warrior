@@ -301,6 +301,18 @@ def render_scene_background_canvas(
         )
         return canvas
 
+    if scene_cfg.scene_mode == "roof01":
+        kb_render.draw_scrolling_roof01_background(
+            canvas,
+            floor_tile,
+            static_sprites,
+            scene_cfg.roof_eli_sprite_id,
+            int(scroll_x),
+            anim_tick,
+            scene_cfg.floor_height,
+        )
+        return canvas
+
     kb_render.draw_scrolling_corridor_background(
         canvas,
         wall_bricks,
@@ -345,7 +357,11 @@ def main() -> int:
     lock_fd, lock_path = instance_lock
     atexit.register(kb_lock.release_instance_lock, lock_fd, lock_path)
 
-    scene_paths = [cfg.NIGHT01_SCENE_CONFIG_PATH, cfg.CORRIDOR_SCENE_CONFIG_PATH]
+    scene_paths = [
+        cfg.NIGHT01_SCENE_CONFIG_PATH,
+        cfg.CORRIDOR_SCENE_CONFIG_PATH,
+        cfg.ROOF01_SCENE_CONFIG_PATH,
+    ]
     active_scene_index = random.randrange(len(scene_paths))
 
     def load_scene_for_path(scene_path):
@@ -362,6 +378,15 @@ def main() -> int:
             floor_tile = static_sprites.get(scene_cfg.floor_sprite_id)
             if floor_tile is None:
                 raise ValueError(f"Scene floor sprite '{scene_cfg.floor_sprite_id}' must be a static sprite")
+        elif scene_cfg.scene_mode == "roof01":
+            floor_tile = static_sprites.get(scene_cfg.floor_sprite_id)
+            if floor_tile is None:
+                raise ValueError(f"Scene floor sprite '{scene_cfg.floor_sprite_id}' must be a static sprite")
+
+            if scene_cfg.roof_eli_sprite_id:
+                eli_tile = static_sprites.get(scene_cfg.roof_eli_sprite_id)
+                if eli_tile is None:
+                    raise ValueError(f"Roof ELI sprite '{scene_cfg.roof_eli_sprite_id}' must be a static sprite")
 
         return scene_cfg, static_sprites, animated_sprites, wall_brick_tiles, floor_tile
 
@@ -493,7 +518,12 @@ def main() -> int:
                 next_auto_scene_switch_at = time.monotonic() + cfg.SCENE_AUTO_SWITCH_SECONDS
 
             if scene_transition is None and pending_scene_steps > 0:
-                next_scene_index = (active_scene_index + pending_scene_steps) % len(scene_paths)
+                next_scene_index = active_scene_index
+                for _ in range(pending_scene_steps):
+                    if len(scene_paths) <= 1:
+                        break
+                    candidates = [idx for idx in range(len(scene_paths)) if idx != next_scene_index]
+                    next_scene_index = random.choice(candidates)
                 pending_scene_steps = 0
                 try:
                     (
@@ -767,6 +797,7 @@ def main() -> int:
                 scene_animated_sprites=scene_animated_sprites,
                 scene_placements=corridor_scene.placements,
                 scene_sky_horizon=corridor_scene.sky_horizon,
+                roof_eli_sprite_id=corridor_scene.roof_eli_sprite_id,
                 background_scroll_x=background_scroll_x,
                 background_anim_tick=background_anim_tick,
                 corridor_floor_height=corridor_scene.floor_height,

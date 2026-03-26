@@ -58,6 +58,7 @@ class CorridorSceneConfig:
     wall_underlay: SceneSkyHorizonConfig | None
     placements: List[ScenePlacementRule]
     sky_horizon: SceneSkyHorizonConfig | None
+    roof_eli_sprite_id: str | None
 
 
 def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
@@ -126,8 +127,8 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
         raise ValueError("Corridor scene config 'composition' must be an object")
 
     scene_mode = composition.get("mode", "brick_floor")
-    if scene_mode not in {"brick_floor", "sky_horizon"}:
-        raise ValueError("Corridor scene config 'composition.mode' must be 'brick_floor' or 'sky_horizon'")
+    if scene_mode not in {"brick_floor", "sky_horizon", "roof01"}:
+        raise ValueError("Corridor scene config 'composition.mode' must be 'brick_floor', 'sky_horizon' or 'roof01'")
 
     wall_brick_sprite_ids: List[str] = []
     floor_sprite_id = ""
@@ -136,6 +137,7 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
     brick_start_offset_y = 0
     wall_underlay: SceneSkyHorizonConfig | None = None
     sky_horizon: SceneSkyHorizonConfig | None = None
+    roof_eli_sprite_id: str | None = None
 
     if scene_mode == "brick_floor":
         def _read_non_negative_int(name: str) -> int:
@@ -198,7 +200,7 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
                 horizon_scroll_divisor=underlay_horizon_scroll_divisor,
                 horizon_offsets=underlay_offsets,
             )
-    else:
+    elif scene_mode == "sky_horizon":
         sky_raw = composition.get("sky")
         if not isinstance(sky_raw, dict):
             raise ValueError("Corridor scene config 'composition.sky' must be an object for sky_horizon mode")
@@ -233,6 +235,23 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
             horizon_scroll_divisor=horizon_scroll_divisor,
             horizon_offsets=horizon_offsets,
         )
+    else:
+        floor_raw = composition.get("floor")
+        if not isinstance(floor_raw, dict):
+            raise ValueError("Corridor scene config 'composition.floor' must be an object for roof01 mode")
+        floor_sprite_id = floor_raw.get("sprite_id")
+        if not isinstance(floor_sprite_id, str) or floor_sprite_id not in sprites:
+            raise ValueError("Corridor scene config 'composition.floor.sprite_id' must reference an existing sprite id")
+        floor_height = floor_raw.get("height")
+        if not isinstance(floor_height, int) or floor_height < 0:
+            raise ValueError("Corridor scene config 'composition.floor.height' must be a non-negative integer")
+
+        roof_raw = composition.get("roof")
+        if not isinstance(roof_raw, dict):
+            raise ValueError("Corridor scene config 'composition.roof' must be an object for roof01 mode")
+        roof_eli_sprite_id = roof_raw.get("eli_sprite_id")
+        if not isinstance(roof_eli_sprite_id, str) or roof_eli_sprite_id not in sprites:
+            raise ValueError("Corridor scene config 'composition.roof.eli_sprite_id' must reference an existing sprite id")
 
     placements_raw = composition.get("placements", [])
     if not isinstance(placements_raw, list):
@@ -310,6 +329,7 @@ def load_corridor_scene_config(path: Path) -> CorridorSceneConfig:
         wall_underlay=wall_underlay,
         placements=placements,
         sky_horizon=sky_horizon,
+        roof_eli_sprite_id=roof_eli_sprite_id,
     )
 
 

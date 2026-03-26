@@ -1,0 +1,27 @@
+{
+  "sprites": [
+    {
+      "id": "ledge_floor",
+      "kind": "static",
+      "image": "ledge.png",
+      "size": [90, 10]
+    },
+    {
+      "id": "eli_main",
+      "kind": "static_alpha",
+      "image": "eli.png",
+      "size": [41, 18]
+    }
+  ],
+  "composition": {
+    "mode": "roof01",
+    "floor": {
+      "sprite_id": "ledge_floor",
+      "height": 10
+    },
+    "roof": {
+      "eli_sprite_id": "eli_main"
+    },
+    "placements": []
+  }
+}
