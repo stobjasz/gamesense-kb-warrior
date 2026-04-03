@@ -15,7 +15,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List
+from typing import List, Literal
 from urllib.error import HTTPError, URLError
 
 import kb_config as cfg
@@ -33,6 +33,7 @@ WM_QUERYENDSESSION = 0x0011
 WM_ENDSESSION      = 0x0016
 WM_CLOSE           = 0x0010
 LRESULT            = ctypes.c_ssize_t
+StopReason         = Literal["manual_quit", "tray_quit", "hotkey", "keyboard_interrupt", "system_shutdown"]
 
 
 # ── Windows shutdown listener ─────────────────────────────────────────────────
@@ -453,11 +454,24 @@ def main() -> int:
         next_retry_at=0.0 if gs_url else time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS,
     )
 
-    # Stop event + Windows shutdown listener
     stop_event = threading.Event()
+    stop_reason: StopReason = "manual_quit"
+    stop_reason_lock = threading.Lock()
+
+    def request_stop(reason: StopReason) -> None:
+        nonlocal stop_reason
+        with stop_reason_lock:
+            if reason == "system_shutdown" or not stop_event.is_set():
+                stop_reason = reason
+        stop_event.set()
+
+    # Stop event + Windows shutdown listener
     shutdown_listener = None
     if sys.platform == "win32":
-        shutdown_listener = WindowsShutdownListener(stop_event.set)
+        def on_windows_shutdown() -> None:
+            request_stop("system_shutdown")
+
+        shutdown_listener = WindowsShutdownListener(on_windows_shutdown)
         shutdown_listener.start()
 
     # Show best score on startup
@@ -474,8 +488,8 @@ def main() -> int:
             gs.next_retry_at = time.monotonic() + cfg.GAMESENSE_RETRY_SECONDS
 
     input_stats = kb_input.InputStats()
-    keyboard_listener, mouse_listener = kb_input.start_ctrl_d_listener(stop_event, input_stats)
-    tray_icon = kb_tray.start_tray_icon(stop_event)
+    keyboard_listener, mouse_listener = kb_input.start_ctrl_d_listener(stop_event, input_stats, on_stop=request_stop)
+    tray_icon = kb_tray.start_tray_icon(stop_event, on_stop=request_stop)
     last_scene_toggle_count = input_stats.get_scene_toggle_count()
     pending_scene_steps = 0
     scene_transition: SceneTransitionState | None = None
@@ -484,14 +498,30 @@ def main() -> int:
     last_seen_space   = 0
     last_seen_other   = 0
     was_sliding = monster.x > monster.target_x
-    _, _, _, last_input_time = input_stats.snapshot()
+    initial_keys, _, _, last_input_time = input_stats.snapshot()
     next_idle_refresh_at = last_input_time + cfg.MONSTER_REFRESH_AFTER_INACTIVITY_SECONDS
     session.next_stats_save_at = time.monotonic() + session.save_interval
+    tray_update_interval = 0.25
+    next_tray_update_at = 0.0
+    last_tray_tooltip: str | None = None
 
-    kb_tray.update_tray_tooltip(tray_icon, format_tray_tooltip(
-        session.warrior_level, session.monsters_killed, input_stats.snapshot()[0],
-        gs.last_error, gs.next_retry_at,
-    ))
+    def maybe_update_tray_tooltip(keys_count: int, force: bool = False) -> None:
+        nonlocal next_tray_update_at, last_tray_tooltip
+        if tray_icon is None:
+            return
+        now = time.monotonic()
+        if not force and now < next_tray_update_at:
+            return
+        tooltip = format_tray_tooltip(
+            session.warrior_level, session.monsters_killed, keys_count,
+            gs.last_error, gs.next_retry_at,
+        )
+        if force or tooltip != last_tray_tooltip:
+            kb_tray.update_tray_tooltip(tray_icon, tooltip)
+            last_tray_tooltip = tooltip
+        next_tray_update_at = now + tray_update_interval
+
+    maybe_update_tray_tooltip(initial_keys, force=True)
 
     update_interval = 1.0 / cfg.FRAMES_PER_SECOND
     last_loop_time   = time.monotonic()
@@ -645,9 +675,7 @@ def main() -> int:
                 frame = kb_render.canvas_to_image_data(transition_canvas)
                 background_anim_tick += 1
                 send_frame_with_retry(gs, frame)
-                kb_tray.update_tray_tooltip(tray_icon, format_tray_tooltip(
-                    session.warrior_level, session.monsters_killed, keys, gs.last_error, gs.next_retry_at,
-                ))
+                maybe_update_tray_tooltip(keys)
 
                 last_seen_space = spaces
                 last_seen_other = others
@@ -698,7 +726,6 @@ def main() -> int:
             warrior_tile, slashfx_tile, attack_finished = warrior_controller.advance(delta, is_sliding)
 
             if attack_finished:
-                keys, _, _, _ = input_stats.snapshot()
                 damage = max(0, (keys - session.last_attack_end_keystrokes)
                              * kb_progression.compute_damage_per_keystroke(session.warrior_level))
                 session.last_attack_end_keystrokes = keys
@@ -823,9 +850,7 @@ def main() -> int:
             background_anim_tick += 1
             send_frame_with_retry(gs, frame)
 
-            kb_tray.update_tray_tooltip(tray_icon, format_tray_tooltip(
-                session.warrior_level, session.monsters_killed, keys, gs.last_error, gs.next_retry_at,
-            ))
+            maybe_update_tray_tooltip(keys)
 
             last_seen_space = spaces
             last_seen_other = others
@@ -836,7 +861,7 @@ def main() -> int:
                 time.sleep(remaining)
 
     except KeyboardInterrupt:
-        pass
+        request_stop("keyboard_interrupt")
     finally:
         stop_event.set()
         if shutdown_listener:
@@ -849,25 +874,34 @@ def main() -> int:
             try: tray_icon.stop()
             except Exception: pass
 
+        with stop_reason_lock:
+            final_stop_reason = stop_reason
         final_keys, _, _, _ = input_stats.snapshot()
         top_place = None
-        try:
-            top_place = kb_scores.record_high_score(
-                cfg.HIGH_SCORES_PATH, session.started_at,
-                final_keys, session.monsters_killed, session.warrior_level,
-            )
-        except OSError as exc:
-            print(f"Warning: could not save high scores: {exc}", file=sys.stderr)
 
-        if gs.base_url:
+        if final_stop_reason != "system_shutdown":
             try:
-                summary = kb_render.compose_shutdown_summary_frame(
-                    final_keys, session.monsters_killed, session.warrior_level, top_place)
-                kb_gamesense.send_frame(gs.base_url, summary)
-                time.sleep(5)
-            except (URLError, HTTPError, OSError):
-                pass
-            kb_gamesense.clear_and_stop(gs.base_url)
+                top_place = kb_scores.record_high_score(
+                    cfg.HIGH_SCORES_PATH, session.started_at,
+                    final_keys, session.monsters_killed, session.warrior_level,
+                )
+            except OSError as exc:
+                print(f"Warning: could not save high scores: {exc}", file=sys.stderr)
+
+            if gs.base_url:
+                try:
+                    summary = kb_render.compose_shutdown_summary_frame(
+                        final_keys, session.monsters_killed, session.warrior_level, top_place)
+                    kb_gamesense.send_frame(gs.base_url, summary)
+                    time.sleep(5)
+                except (URLError, HTTPError, OSError):
+                    pass
+
+        cleanup_base_url = gs.base_url
+        if cleanup_base_url is None and final_stop_reason == "system_shutdown":
+            cleanup_base_url, _ = kb_gamesense.connect_gamesense_with_error()
+        if cleanup_base_url:
+            kb_gamesense.clear_and_stop(cleanup_base_url)
 
     return 0
 

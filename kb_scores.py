@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -38,8 +40,20 @@ def load_high_scores(path: Path) -> List[dict]:
 
 
 def save_high_scores(path: Path, scores: List[dict]) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(scores, f, ensure_ascii=False, indent=2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(scores, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp_path.replace(path)
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
 
 
 def get_best_score(path: Path) -> dict | None:

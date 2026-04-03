@@ -2,6 +2,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
+from typing import Callable
 from pynput import keyboard, mouse
 
 
@@ -44,7 +45,11 @@ class InputStats:
             return self.scene_toggle_count
 
 
-def start_ctrl_d_listener(stop_event: threading.Event, input_stats: InputStats):
+def start_ctrl_d_listener(
+    stop_event: threading.Event,
+    input_stats: InputStats,
+    on_stop: Callable[[str], None] | None = None,
+):
     ctrl_pressed = False
     alt_pressed = False
     pressed_keys: set = set()
@@ -61,7 +66,10 @@ def start_ctrl_d_listener(stop_event: threading.Event, input_stats: InputStats):
         if is_ctrl(key): ctrl_pressed = True
         elif is_alt(key): alt_pressed = True
         if key == keyboard.Key.backspace and ctrl_pressed and alt_pressed:
-            stop_event.set()
+            if on_stop is not None:
+                on_stop("hotkey")
+            else:
+                stop_event.set()
             return False
         if key == keyboard.Key.page_up and ctrl_pressed and alt_pressed and key not in pressed_keys:
             input_stats.record_scene_toggle()

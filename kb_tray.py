@@ -1,6 +1,7 @@
 from __future__ import annotations
 import sys
 import threading
+from typing import Callable
 from PIL import Image, ImageDraw
 from kb_config import TILE_SIZE, WARRIOR_IDLE_PATH
 
@@ -24,13 +25,16 @@ def create_tray_icon_image() -> Image.Image:
     return icon
 
 
-def start_tray_icon(stop_event: threading.Event):
+def start_tray_icon(stop_event: threading.Event, on_stop: Callable[[str], None] | None = None):
     if pystray is None:
         print("Warning: pystray is not installed; tray icon disabled.", file=sys.stderr)
         return None
 
     def on_quit(icon, item) -> None:
-        stop_event.set()
+        if on_stop is not None:
+            on_stop("tray_quit")
+        else:
+            stop_event.set()
         icon.stop()
 
     tray_icon = pystray.Icon(
