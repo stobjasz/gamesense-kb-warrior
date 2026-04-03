@@ -3,11 +3,12 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List
 from kb_config import BACKGROUND_TILE_SIZE, FONT_5X7, HEALTH_BAR_WIDTH, HEALTH_BAR_Y, HEIGHT, LEFT_SPRITE_X, SLASHFX_X_OFFSET, TILE_SIZE, WIDTH
-from kb_sprites import ScenePlacementRule, SceneSkyHorizonConfig
+from kb_sprites import SceneLayerSpec, ScenePlacementRule, SceneSkyHorizonConfig
 
 
 @dataclass(frozen=True)
 class RenderState:
+    scene_layers: List[SceneLayerSpec]
     scene_mode: str
     background_wall_brick_tiles: List[List[List[int]]]
     background_floor_tile: List[List[int]]
@@ -37,6 +38,135 @@ class RenderState:
     drop_x: int
     drop_y: int
     show_drop: bool
+
+
+def compose_scene_background_canvas(
+    scene_layers: List[SceneLayerSpec],
+    scene_mode: str,
+    background_wall_brick_tiles: List[List[List[int]]],
+    background_floor_tile: List[List[int]],
+    scene_static_sprites: Dict[str, List[List[int]]],
+    scene_animated_sprites: Dict[str, List[List[List[int]]]],
+    scene_placements: List[ScenePlacementRule],
+    scene_sky_horizon: SceneSkyHorizonConfig | None,
+    roof_eli_sprite_id: str | None,
+    background_scroll_x: float,
+    background_anim_tick: int,
+    corridor_floor_height: int,
+    corridor_brick_start_offset_x: int,
+    corridor_brick_start_offset_y: int,
+    corridor_wall_underlay: SceneSkyHorizonConfig | None,
+) -> List[List[int]]:
+    canvas = [[0] * WIDTH for _ in range(HEIGHT)]
+    scroll_px = int(background_scroll_x)
+
+    if scene_layers:
+        for layer in scene_layers:
+            params = layer.params
+            if layer.layer_type == "sky_horizon":
+                sky_tile = scene_static_sprites.get(str(params["sky_sprite_id"]))
+                if sky_tile is None:
+                    raise ValueError(f"Sky sprite '{params['sky_sprite_id']}' not loaded")
+                draw_scrolling_sky_horizon_background(
+                    canvas,
+                    sky_tile,
+                    scroll_px,
+                    int(params["sky_scroll_divisor"]),
+                    int(params["horizon_base_y"]),
+                    list(params["horizon_offsets"]),
+                    int(params["horizon_scroll_divisor"]),
+                )
+                continue
+
+            if layer.layer_type == "roof01":
+                floor_tile = scene_static_sprites.get(str(params["floor_sprite_id"]))
+                if floor_tile is None:
+                    raise ValueError(f"Roof floor sprite '{params['floor_sprite_id']}' not loaded")
+                draw_scrolling_roof01_background(
+                    canvas,
+                    floor_tile,
+                    scene_static_sprites,
+                    str(params["roof_eli_sprite_id"]),
+                    scroll_px,
+                    background_anim_tick,
+                    int(params["floor_height"]),
+                )
+                continue
+
+            if layer.layer_type == "corridor":
+                wall_ids = list(params["wall_brick_sprite_ids"])
+                wall_tiles = []
+                for sprite_id in wall_ids:
+                    tile = scene_static_sprites.get(sprite_id)
+                    if tile is None:
+                        raise ValueError(f"Corridor wall sprite '{sprite_id}' not loaded")
+                    wall_tiles.append(tile)
+                floor_tile = scene_static_sprites.get(str(params["floor_sprite_id"]))
+                if floor_tile is None:
+                    raise ValueError(f"Corridor floor sprite '{params['floor_sprite_id']}' not loaded")
+                draw_scrolling_corridor_background(
+                    canvas,
+                    wall_tiles,
+                    floor_tile,
+                    scene_static_sprites,
+                    scene_animated_sprites,
+                    list(params["placements"]),
+                    background_scroll_x,
+                    background_anim_tick,
+                    int(params["floor_height"]),
+                    int(params["brick_start_offset_x"]),
+                    int(params["brick_start_offset_y"]),
+                    params["wall_underlay"],
+                )
+                continue
+
+            raise ValueError(f"Unsupported scene layer type: {layer.layer_type}")
+
+        return canvas
+
+    # Backward-compatible fallback for older in-memory callsites.
+    if scene_mode == "sky_horizon":
+        sky = scene_sky_horizon
+        if sky is None:
+            raise ValueError("RenderState.scene_sky_horizon is required for sky_horizon mode")
+        sky_tile = scene_static_sprites.get(sky.sky_sprite_id)
+        if sky_tile is None:
+            raise ValueError(f"Sky sprite '{sky.sky_sprite_id}' not loaded")
+        draw_scrolling_sky_horizon_background(
+            canvas,
+            sky_tile,
+            scroll_px,
+            sky.sky_scroll_divisor,
+            sky.horizon_base_y,
+            sky.horizon_offsets,
+            sky.horizon_scroll_divisor,
+        )
+    elif scene_mode == "roof01":
+        draw_scrolling_roof01_background(
+            canvas,
+            background_floor_tile,
+            scene_static_sprites,
+            roof_eli_sprite_id,
+            scroll_px,
+            background_anim_tick,
+            corridor_floor_height,
+        )
+    else:
+        draw_scrolling_corridor_background(
+            canvas,
+            background_wall_brick_tiles,
+            background_floor_tile,
+            scene_static_sprites,
+            scene_animated_sprites,
+            scene_placements,
+            background_scroll_x,
+            background_anim_tick,
+            corridor_floor_height,
+            corridor_brick_start_offset_x,
+            corridor_brick_start_offset_y,
+            corridor_wall_underlay,
+        )
+    return canvas
 
 
 def canvas_to_image_data(canvas: List[List[int]]) -> List[int]:
@@ -555,48 +685,23 @@ def _extract_best_score_stats(best_score: dict | None) -> tuple[int, int, int]:
 
 
 def compose_frame(state: RenderState) -> List[int]:
-    canvas = [[0] * WIDTH for _ in range(HEIGHT)]
-    if state.scene_mode == "sky_horizon":
-        sky = state.scene_sky_horizon
-        if sky is None:
-            raise ValueError("RenderState.scene_sky_horizon is required for sky_horizon mode")
-        sky_tile = state.scene_static_sprites.get(sky.sky_sprite_id)
-        if sky_tile is None:
-            raise ValueError(f"Sky sprite '{sky.sky_sprite_id}' not loaded")
-        draw_scrolling_sky_horizon_background(
-            canvas,
-            sky_tile,
-            int(state.background_scroll_x),
-            sky.sky_scroll_divisor,
-            sky.horizon_base_y,
-            sky.horizon_offsets,
-            sky.horizon_scroll_divisor,
-        )
-    elif state.scene_mode == "roof01":
-        draw_scrolling_roof01_background(
-            canvas,
-            state.background_floor_tile,
-            state.scene_static_sprites,
-            state.roof_eli_sprite_id,
-            int(state.background_scroll_x),
-            state.background_anim_tick,
-            state.corridor_floor_height,
-        )
-    else:
-        draw_scrolling_corridor_background(
-            canvas,
-            state.background_wall_brick_tiles,
-            state.background_floor_tile,
-            state.scene_static_sprites,
-            state.scene_animated_sprites,
-            state.scene_placements,
-            state.background_scroll_x,
-            state.background_anim_tick,
-            state.corridor_floor_height,
-            state.corridor_brick_start_offset_x,
-            state.corridor_brick_start_offset_y,
-            state.corridor_wall_underlay,
-        )
+    canvas = compose_scene_background_canvas(
+        scene_layers=state.scene_layers,
+        scene_mode=state.scene_mode,
+        background_wall_brick_tiles=state.background_wall_brick_tiles,
+        background_floor_tile=state.background_floor_tile,
+        scene_static_sprites=state.scene_static_sprites,
+        scene_animated_sprites=state.scene_animated_sprites,
+        scene_placements=state.scene_placements,
+        scene_sky_horizon=state.scene_sky_horizon,
+        roof_eli_sprite_id=state.roof_eli_sprite_id,
+        background_scroll_x=state.background_scroll_x,
+        background_anim_tick=state.background_anim_tick,
+        corridor_floor_height=state.corridor_floor_height,
+        corridor_brick_start_offset_x=state.corridor_brick_start_offset_x,
+        corridor_brick_start_offset_y=state.corridor_brick_start_offset_y,
+        corridor_wall_underlay=state.corridor_wall_underlay,
+    )
     draw_tile_on_canvas(canvas, state.right_sprite_tile, state.right_sprite_x, HEIGHT - TILE_SIZE)
     draw_tile_on_canvas(canvas, state.left_sprite_tile, state.left_sprite_x, HEIGHT - TILE_SIZE)
 

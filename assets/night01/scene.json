@@ -8,16 +8,15 @@
     }
   ],
   "composition": {
-    "mode": "sky_horizon",
-    "sky": {
-      "sprite_id": "sky_main",
-      "scroll_divisor": 1
-    },
-    "horizon": {
-      "base_y": 25,
-      "scroll_divisor": 3,
-      "offsets": [0, 0, -1, -1, -2, -1, 0, 1, 1, 0, -1, -2, -1, 0, 1, 2, 1, 0]
-    },
-    "placements": []
+    "layers": [
+      {
+        "type": "sky_horizon",
+        "sky_sprite_id": "sky_main",
+        "sky_scroll_divisor": 1,
+        "horizon_base_y": 25,
+        "horizon_scroll_divisor": 3,
+        "horizon_offsets": [0, 0, -1, -1, -2, -1, 0, 1, 1, 0, -1, -2, -1, 0, 1, 2, 1, 0]
+      }
+    ]
   }
 }

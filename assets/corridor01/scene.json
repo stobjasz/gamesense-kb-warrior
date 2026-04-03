@@ -56,70 +56,69 @@
     }
   ],
   "composition": {
-    "mode": "brick_floor",
-    "floor_height": 9,
-    "brick_start_offset_x": 7,
-    "brick_start_offset_y": 3,
-    "wall_underlay": {
-      "sprite_id": "wall_underlay_sky",
-      "scroll_divisor": 3,
-      "horizon_base_y": 23,
-      "horizon_scroll_divisor": 5,
-      "horizon_offsets": [0, 0, -1, -2, -2, -1, 0, 1, 1, 0, -1, -2, -1, 0, 1, 2, 2, 1, 0, -1, -1, 0]
-    },
-    "wall": {
-      "brick_sprite_ids": [
-        "brick_base",
-        "brick_alt_1",
-        "brick_alt_2",
-        "brick_alt_3"
-      ]
-    },
-    "floor": {
-      "sprite_id": "floor_main",
-      "height": 9
-    },
-    "placements": [
+    "layers": [
       {
-        "sprite_id": "door_main",
-        "y_anchor": "floor_top",
-        "clear_under_sprite": true,
-        "distribution": {
-          "mode": "segmented_random",
-          "interval_px": 256,
-          "count_per_interval": 1,
-          "bootstrap_intervals": 1
-        }
-      },
-      {
-        "sprite_id": "window_main",
-        "y_anchor": "wall_center",
-        "composite_mode": "transparent_cutout",
-        "avoid_overlap_with": [
-          "door_main",
-          "torch_wall"
+        "type": "corridor",
+        "wall_brick_sprite_ids": [
+          "brick_base",
+          "brick_alt_1",
+          "brick_alt_2",
+          "brick_alt_3"
         ],
-        "overlap_margin": 2,
-        "distribution": {
-          "mode": "segmented_random",
-          "interval_px": 256,
-          "count_per_interval": 1,
-          "bootstrap_intervals": 1
-        }
-      },
-      {
-        "sprite_id": "torch_wall",
-        "y_anchor": "wall_center",
-        "avoid_overlap_with": [
-          "door_main",
-          "window_main"
-        ],
-        "overlap_margin": 1,
-        "distribution": {
-          "mode": "repeat_every",
-          "interval_px": 150,
-          "count_per_interval": 2
-        }
+        "floor_sprite_id": "floor_main",
+        "floor_height": 9,
+        "brick_start_offset_x": 7,
+        "brick_start_offset_y": 3,
+        "wall_underlay": {
+          "sprite_id": "wall_underlay_sky",
+          "scroll_divisor": 3,
+          "horizon_base_y": 23,
+          "horizon_scroll_divisor": 5,
+          "horizon_offsets": [0, 0, -1, -2, -2, -1, 0, 1, 1, 0, -1, -2, -1, 0, 1, 2, 2, 1, 0, -1, -1, 0]
+        },
+        "placements": [
+          {
+            "sprite_id": "door_main",
+            "y_anchor": "floor_top",
+            "clear_under_sprite": true,
+            "distribution": {
+              "mode": "segmented_random",
+              "interval_px": 256,
+              "count_per_interval": 1,
+              "bootstrap_intervals": 1
+            }
+          },
+          {
+            "sprite_id": "window_main",
+            "y_anchor": "wall_center",
+            "composite_mode": "transparent_cutout",
+            "avoid_overlap_with": [
+              "door_main",
+              "torch_wall"
+            ],
+            "overlap_margin": 2,
+            "distribution": {
+              "mode": "segmented_random",
+              "interval_px": 256,
+              "count_per_interval": 1,
+              "bootstrap_intervals": 1
+            }
+          },
+          {
+            "sprite_id": "torch_wall",
+            "y_anchor": "wall_center",
+            "avoid_overlap_with": [
+              "door_main",
+              "window_main"
+            ],
+            "overlap_margin": 1,
+            "distribution": {
+              "mode": "repeat_every",
+              "interval_px": 150,
+              "count_per_interval": 2
+            }
+          }
+        ]
       }
     ]
   }

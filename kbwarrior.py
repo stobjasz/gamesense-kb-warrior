@@ -283,52 +283,24 @@ def render_scene_background_canvas(
     scroll_x: float,
     anim_tick: int,
 ) -> List[List[int]]:
-    canvas = [[0] * cfg.WIDTH for _ in range(cfg.HEIGHT)]
-    if scene_cfg.scene_mode == "sky_horizon":
-        sky = scene_cfg.sky_horizon
-        if sky is None:
-            return canvas
-        sky_tile = static_sprites.get(sky.sky_sprite_id)
-        if sky_tile is None:
-            return canvas
-        kb_render.draw_scrolling_sky_horizon_background(
-            canvas,
-            sky_tile,
-            int(scroll_x),
-            sky.sky_scroll_divisor,
-            sky.horizon_base_y,
-            sky.horizon_offsets,
-            sky.horizon_scroll_divisor,
-        )
-        return canvas
-
-    if scene_cfg.scene_mode == "roof01":
-        kb_render.draw_scrolling_roof01_background(
-            canvas,
-            floor_tile,
-            static_sprites,
-            scene_cfg.roof_eli_sprite_id,
-            int(scroll_x),
-            anim_tick,
-            scene_cfg.floor_height,
-        )
-        return canvas
-
-    kb_render.draw_scrolling_corridor_background(
-        canvas,
-        wall_bricks,
-        floor_tile,
-        static_sprites,
-        animated_sprites,
-        scene_cfg.placements,
-        int(scroll_x),
-        anim_tick,
-        scene_cfg.floor_height,
-        scene_cfg.brick_start_offset_x,
-        scene_cfg.brick_start_offset_y,
-        scene_cfg.wall_underlay,
+    del wall_bricks, floor_tile
+    return kb_render.compose_scene_background_canvas(
+        scene_layers=scene_cfg.layers,
+        scene_mode=scene_cfg.scene_mode,
+        background_wall_brick_tiles=[],
+        background_floor_tile=[[0]],
+        scene_static_sprites=static_sprites,
+        scene_animated_sprites=animated_sprites,
+        scene_placements=scene_cfg.placements,
+        scene_sky_horizon=scene_cfg.sky_horizon,
+        roof_eli_sprite_id=scene_cfg.roof_eli_sprite_id,
+        background_scroll_x=scroll_x,
+        background_anim_tick=anim_tick,
+        corridor_floor_height=scene_cfg.floor_height,
+        corridor_brick_start_offset_x=scene_cfg.brick_start_offset_x,
+        corridor_brick_start_offset_y=scene_cfg.brick_start_offset_y,
+        corridor_wall_underlay=scene_cfg.wall_underlay,
     )
-    return canvas
 
 
 def build_pixel_swarm(canvas: List[List[int]], direction: str) -> List[TransitionPixel]:
@@ -371,23 +343,33 @@ def main() -> int:
 
         wall_brick_tiles: List[List[List[int]]] = []
         floor_tile: List[List[int]] = [[0]]
-        if scene_cfg.scene_mode == "brick_floor":
-            wall_brick_tiles = [static_sprites[sprite_id] for sprite_id in scene_cfg.wall_brick_sprite_ids]
-            if not wall_brick_tiles:
-                raise ValueError("Brick-floor scene must define at least one wall brick sprite")
-
-            floor_tile = static_sprites.get(scene_cfg.floor_sprite_id)
-            if floor_tile is None:
-                raise ValueError(f"Scene floor sprite '{scene_cfg.floor_sprite_id}' must be a static sprite")
-        elif scene_cfg.scene_mode == "roof01":
-            floor_tile = static_sprites.get(scene_cfg.floor_sprite_id)
-            if floor_tile is None:
-                raise ValueError(f"Scene floor sprite '{scene_cfg.floor_sprite_id}' must be a static sprite")
-
-            if scene_cfg.roof_eli_sprite_id:
-                eli_tile = static_sprites.get(scene_cfg.roof_eli_sprite_id)
+        for layer in scene_cfg.layers:
+            params = layer.params
+            if layer.layer_type == "corridor":
+                wall_brick_tiles = []
+                for sprite_id in list(params["wall_brick_sprite_ids"]):
+                    tile = static_sprites.get(sprite_id)
+                    if tile is None:
+                        raise ValueError(f"Scene wall sprite '{sprite_id}' must be a static sprite")
+                    wall_brick_tiles.append(tile)
+                if not wall_brick_tiles:
+                    raise ValueError("Corridor layer must define at least one wall brick sprite")
+                floor_tile = static_sprites.get(str(params["floor_sprite_id"]))
+                if floor_tile is None:
+                    raise ValueError(f"Scene floor sprite '{params['floor_sprite_id']}' must be a static sprite")
+            elif layer.layer_type == "roof01":
+                floor_tile = static_sprites.get(str(params["floor_sprite_id"]))
+                if floor_tile is None:
+                    raise ValueError(f"Scene floor sprite '{params['floor_sprite_id']}' must be a static sprite")
+                eli_sprite_id = str(params["roof_eli_sprite_id"])
+                eli_tile = static_sprites.get(eli_sprite_id)
                 if eli_tile is None:
-                    raise ValueError(f"Roof ELI sprite '{scene_cfg.roof_eli_sprite_id}' must be a static sprite")
+                    raise ValueError(f"Roof ELI sprite '{eli_sprite_id}' must be a static sprite")
+            elif layer.layer_type == "sky_horizon":
+                sky_sprite_id = str(params["sky_sprite_id"])
+                sky_tile = static_sprites.get(sky_sprite_id)
+                if sky_tile is None:
+                    raise ValueError(f"Sky sprite '{sky_sprite_id}' must be a static sprite")
 
         return scene_cfg, static_sprites, animated_sprites, wall_brick_tiles, floor_tile
 
@@ -817,6 +799,7 @@ def main() -> int:
                 drop_y = int(active_drop.y)
 
             frame = kb_render.compose_frame(kb_render.RenderState(
+                scene_layers=corridor_scene.layers,
                 scene_mode=corridor_scene.scene_mode,
                 background_wall_brick_tiles=background_wall_brick_tiles,
                 background_floor_tile=background_floor_tile,

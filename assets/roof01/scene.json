@@ -14,14 +14,13 @@
     }
   ],
   "composition": {
-    "mode": "roof01",
-    "floor": {
-      "sprite_id": "ledge_floor",
-      "height": 10
-    },
-    "roof": {
-      "eli_sprite_id": "eli_main"
-    },
-    "placements": []
+    "layers": [
+      {
+        "type": "roof01",
+        "floor_sprite_id": "ledge_floor",
+        "floor_height": 10,
+        "roof_eli_sprite_id": "eli_main"
+      }
+    ]
   }
 }
