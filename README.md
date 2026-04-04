@@ -10,6 +10,7 @@ The application currently supports **Windows** and runs quietly in the backgroun
 - Animated battle visuals optimized for **128x40 px** displays
 - Lightweight background app with tray integration
 - Quick keyboard shortcut to quit: **Ctrl+Alt+Backspace**
+- Quick keyboard shortcut to force scene change: **Ctrl+Alt+PageUp**
 - Windows-only support for now
 
 ## Graphics credits

@@ -505,7 +505,8 @@ def main() -> int:
 
     maybe_update_tray_tooltip(initial_keys, force=True)
 
-    update_interval = 1.0 / cfg.FRAMES_PER_SECOND
+    target_updates_per_second = max(1, min(cfg.FRAMES_PER_SECOND, cfg.DEVICE_UPDATES_PER_SECOND))
+    update_interval = 1.0 / target_updates_per_second
     last_loop_time   = time.monotonic()
 
     try:
